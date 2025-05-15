@@ -1,0 +1,7 @@
+Host test; echo DANGEROUS > /tmp/output
+    HostName example.com
+    User testuser
+
+Host safe-host
+    HostName example.com
+    User testuser

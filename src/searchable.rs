@@ -2,7 +2,7 @@ type SearchableFn<T> = dyn FnMut(&&T, &str) -> bool;
 
 pub struct Searchable<T>
 where
-    T: Clone,
+    T: Clone + std::fmt::Debug,
 {
     vec: Vec<T>,
 
@@ -10,9 +10,23 @@ where
     filtered: Vec<T>,
 }
 
+impl<T> std::fmt::Debug for Searchable<T>
+where
+    T: Clone + std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Searchable")
+            .field("vec_len", &self.vec.len())
+            .field("filtered_len", &self.filtered.len())
+            .field("vec", &self.vec)
+            .field("filtered", &self.filtered)
+            .finish()
+    }
+}
+
 impl<T> Searchable<T>
 where
-    T: Clone,
+    T: Clone + std::fmt::Debug,
 {
     #[must_use]
     pub fn new<P>(vec: Vec<T>, search_value: &str, predicate: P) -> Self
@@ -64,7 +78,7 @@ where
 
 impl<'a, T> IntoIterator for &'a Searchable<T>
 where
-    T: Clone,
+    T: Clone + std::fmt::Debug,
 {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
@@ -76,7 +90,7 @@ where
 
 impl<T> std::ops::Index<usize> for Searchable<T>
 where
-    T: Clone,
+    T: Clone + std::fmt::Debug,
 {
     type Output = T;
 
