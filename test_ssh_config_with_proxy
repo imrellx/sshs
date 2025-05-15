@@ -1,8 +1,0 @@
-Host test-host
-    HostName example.com
-    User testuser
-    ProxyCommand ssh proxy.example.com nc %h %p
-
-Host direct-host
-    HostName direct.example.com
-    User directuser
