@@ -11,6 +11,8 @@ pub enum FormState {
     Hidden,
     /// Form is active and visible
     Active,
+    /// Showing confirmation dialog
+    Confirming,
 }
 
 /// Form for adding a new SSH host
@@ -258,6 +260,22 @@ impl AddHostForm {
         Ok(false)
     }
 
+    /// Check if a host with the same name would be a duplicate
+    /// 
+    /// # Errors
+    /// 
+    /// Will return `Err` if the file cannot be read
+    pub fn check_duplicate(&self, config_path: &str) -> Result<bool> {
+        if !self.is_valid() {
+            return Ok(false); // Invalid form can't be a duplicate
+        }
+        
+        let host_name = self.sanitize_host_name();
+        let host_exists = self.host_exists(config_path, &host_name)?;
+        
+        Ok(host_exists)
+    }
+
     /// Save the form data to the SSH config file
     /// 
     /// # Errors
@@ -292,11 +310,7 @@ impl AddHostForm {
             return Err(anyhow!("SSH config file does not exist"));
         }
         
-        // Check if a host with the same name already exists
-        let host_exists = self.host_exists(config_path, &host_name)?;
-        if host_exists {
-            return Err(anyhow!("A host with this name already exists in the SSH config file"));
-        }
+        // Note: We no longer need to check for duplicates here, since the app handles it before calling this method
 
         // Create a backup of the original config file
         let backup_path = format!("{}.bak", config_path);

@@ -18,6 +18,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     match app.form_state {
         FormState::Hidden => render_main_ui(f, app),
         FormState::Active => render_form_ui(f, app),
+        FormState::Confirming => render_confirmation_ui(f, app),
     }
 }
 
@@ -215,6 +216,65 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
     if let Some(message) = &app.feedback_message {
         render_feedback(f, message, app.is_feedback_error);
     }
+}
+
+/// Render a confirmation dialog
+fn render_confirmation_ui(f: &mut Frame, app: &mut App) {
+    // First render the form UI in the background
+    render_form_ui(f, app);
+    
+    let area = f.area();
+    
+    // Create a centered box for the confirmation dialog
+    let message = app.confirm_message.as_deref().unwrap_or("Confirm?");
+    let dialog_width = 50.max(u16::try_from(message.len()).unwrap_or(50) + 4);
+    let dialog_height = 7; // Increased height for buttons
+    let horizontal_margin = (area.width.saturating_sub(dialog_width)) / 2;
+    let vertical_margin = (area.height.saturating_sub(dialog_height)) / 2;
+    
+    let dialog_area = Rect::new(
+        horizontal_margin,
+        vertical_margin,
+        dialog_width,
+        dialog_height,
+    );
+    
+    // Clear the area first
+    f.render_widget(Clear, dialog_area);
+    
+    // Create a block for the dialog
+    let dialog_block = Block::default()
+        .title("Confirmation Required")
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(tailwind::ORANGE.c500))
+        .border_type(BorderType::Rounded);
+    
+    f.render_widget(dialog_block, dialog_area);
+    
+    // Split the inner area into message and buttons
+    let inner_area = dialog_area.inner(Margin::new(2, 1));
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // Message
+        Constraint::Length(1), // Spacing
+        Constraint::Length(1), // Buttons
+    ])
+    .split(inner_area);
+    
+    // Render message
+    let message_paragraph = Paragraph::new(Line::from(message))
+        .alignment(Alignment::Center)
+        .style(Style::new().fg(Color::White));
+    
+    f.render_widget(message_paragraph, chunks[0]);
+    
+    // Render buttons
+    let action_text = app.confirm_action.as_deref().unwrap_or("Yes");
+    let buttons_text = format!("(Y) {} | (N) Cancel", action_text);
+    let buttons_paragraph = Paragraph::new(Line::from(buttons_text))
+        .alignment(Alignment::Center)
+        .style(Style::new().fg(tailwind::BLUE.c400));
+    
+    f.render_widget(buttons_paragraph, chunks[2]);
 }
 
 /// Render a feedback message

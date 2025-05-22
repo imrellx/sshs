@@ -67,6 +67,10 @@ pub struct App {
     pub form_state: FormState,
     pub feedback_message: Option<String>,
     pub is_feedback_error: bool,
+    
+    // Confirmation dialog
+    pub confirm_message: Option<String>,
+    pub confirm_action: Option<String>,
 }
 
 #[derive(PartialEq)]
@@ -74,6 +78,7 @@ pub enum AppKeyAction {
     Ok,
     Stop,
     Continue,
+    Confirm,
 }
 
 impl App {
@@ -136,6 +141,9 @@ impl App {
             form_state: FormState::Hidden,
             feedback_message: None,
             is_feedback_error: false,
+            
+            confirm_message: None,
+            confirm_action: None,
         };
         app.calculate_table_columns_constraints();
 
@@ -199,18 +207,22 @@ impl App {
                             match action {
                                 AppKeyAction::Ok => continue,
                                 AppKeyAction::Stop => break,
+                                AppKeyAction::Confirm => continue, // Should not happen in this state
                                 AppKeyAction::Continue => {}
                             }
                         }
-                        FormState::Active => {
+                        FormState::Active | FormState::Confirming => {
                             let action = self.on_form_key_press(key)?;
                             match action {
                                 AppKeyAction::Ok => continue,
                                 AppKeyAction::Stop => {
                                     self.form_state = FormState::Hidden;
                                     self.add_host_form = None;
+                                    self.confirm_message = None;
+                                    self.confirm_action = None;
                                     continue;
                                 }
+                                AppKeyAction::Confirm => continue,
                                 AppKeyAction::Continue => {}
                             }
                         }
@@ -234,6 +246,10 @@ impl App {
                         if let Some(form) = &mut self.add_host_form {
                             form.handle_event(&ev);
                         }
+                    }
+                    FormState::Confirming => {
+                        // Don't handle regular events in confirmation mode
+                        // Only key presses are handled
                     }
                 }
             }
@@ -347,26 +363,89 @@ impl App {
         #[allow(clippy::enum_glob_use)]
         use KeyCode::*;
 
+        // If we're in confirmation mode, handle that first
+        if self.form_state == FormState::Confirming {
+            match key.code {
+                Esc | Char('n') | Char('N') => {
+                    // Cancel the confirmation
+                    self.form_state = FormState::Active;
+                    self.confirm_message = None;
+                    self.confirm_action = None;
+                    return Ok(AppKeyAction::Ok);
+                },
+                Enter | Char('y') | Char('Y') => {
+                    // Proceed with saving
+                    self.form_state = FormState::Active;
+                    
+                    // Save the host (we already validated it's valid)
+                    match self.save_new_host() {
+                        Ok(()) => {
+                            self.feedback_message = Some("Host added successfully!".to_string());
+                            self.is_feedback_error = false;
+                            self.form_state = FormState::Hidden;
+                            self.add_host_form = None;
+                            self.confirm_message = None;
+                            self.confirm_action = None;
+                            
+                            // Reload the hosts
+                            self.reload_hosts()?;
+                            
+                            return Ok(AppKeyAction::Ok);
+                        }
+                        Err(e) => {
+                            self.feedback_message = Some(format!("Error: {}", e));
+                            self.is_feedback_error = true;
+                            self.confirm_message = None;
+                            self.confirm_action = None;
+                            return Ok(AppKeyAction::Ok);
+                        }
+                    }
+                },
+                _ => return Ok(AppKeyAction::Continue),
+            }
+        }
+
+        // Normal form handling
         match key.code {
             Esc => Ok(AppKeyAction::Stop),
             Enter => {
                 if let Some(form) = &self.add_host_form {
                     if form.is_valid() {
-                        // Save the host
-                        match self.save_new_host() {
-                            Ok(()) => {
-                                self.feedback_message = Some("Host added successfully!".to_string());
-                                self.is_feedback_error = false;
-                                self.form_state = FormState::Hidden;
-                                self.add_host_form = None;
-                                
-                                // Reload the hosts
-                                self.reload_hosts()?;
-                                
-                                return Ok(AppKeyAction::Ok);
-                            }
+                        // Check if the host already exists
+                        let config_path = shellexpand::tilde(&self.config.config_paths[1]).to_string();
+                        match form.check_duplicate(&config_path) {
+                            Ok(true) => {
+                                // Host exists, show confirmation dialog
+                                self.confirm_message = Some(format!("Host '{}' already exists. Overwrite?", 
+                                    form.host_name.value().trim()));
+                                self.confirm_action = Some("Overwrite".to_string());
+                                self.form_state = FormState::Confirming;
+                                return Ok(AppKeyAction::Confirm);
+                            },
+                            Ok(false) => {
+                                // No duplicate, proceed with saving
+                                match self.save_new_host() {
+                                    Ok(()) => {
+                                        self.feedback_message = Some("Host added successfully!".to_string());
+                                        self.is_feedback_error = false;
+                                        self.form_state = FormState::Hidden;
+                                        self.add_host_form = None;
+                                        
+                                        // Reload the hosts
+                                        self.reload_hosts()?;
+                                        
+                                        return Ok(AppKeyAction::Ok);
+                                    }
+                                    Err(e) => {
+                                        self.feedback_message = Some(format!("Error: {}", e));
+                                        self.is_feedback_error = true;
+                                        return Ok(AppKeyAction::Ok);
+                                    }
+                                }
+                            },
                             Err(e) => {
-                                self.feedback_message = Some(format!("Error: {}", e));
+                                // Error checking for duplicates
+                                self.feedback_message = Some(format!("Error checking for duplicates: {}", e));
                                 self.is_feedback_error = true;
                                 return Ok(AppKeyAction::Ok);
                             }
