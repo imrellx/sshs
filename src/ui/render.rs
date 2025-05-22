@@ -1,7 +1,7 @@
 use ratatui::{
     prelude::*,
     widgets::{Block, BorderType, Borders, Cell, Clear, HighlightSpacing, Padding, Paragraph, Row, Table},
-    text::{Line, Text},
+    text::{Line, Span, Text},
     layout::Margin,
 };
 use style::palette::tailwind;
@@ -54,9 +54,10 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
     
     // Create a centered box for the form with additional space
     let form_width = 60;
-    let form_height = 14; // Increased height
+    let form_height = 14; // Base height for the form
+    let total_height = form_height + 2; // Add space for help text and field hints
     let horizontal_margin = (area.width.saturating_sub(form_width)) / 2;
-    let vertical_margin = (area.height.saturating_sub(form_height)) / 2;
+    let vertical_margin = (area.height.saturating_sub(total_height)) / 2;
     
     let form_area = Rect::new(
         horizontal_margin,
@@ -65,9 +66,14 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
         form_height,
     );
     
-    // Create a block for the form
+    // Create a block for the form with styled title
+    let title = Line::from(vec![
+        Span::styled("Add New SSH Host ", Style::new().fg(app.palette.c400)),
+        Span::styled("(Ctrl+N)", Style::new().fg(app.palette.c300).add_modifier(Modifier::ITALIC)),
+    ]);
+    
     let form_block = Block::default()
-        .title("Add New SSH Host")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::new().fg(app.palette.c400))
         .border_type(BorderType::Rounded);
@@ -197,11 +203,38 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
         f.set_cursor_position(cursor_position);
     }
     
-    // Render help text
-    let help_text = "(Tab) next field | (Shift+Tab) previous field | (Enter) save | (Esc) cancel";
-    let help_paragraph = Paragraph::new(Line::from(help_text))
-        .alignment(Alignment::Center)
-        .style(Style::new().fg(app.palette.c300));
+    // Render keyboard shortcut hints
+    let shortcuts = [
+        ("Tab", "Next field"),
+        ("Shift+Tab", "Previous field"),
+        ("Enter", "Save"),
+        ("Esc", "Cancel"),
+    ];
+    
+    // Create a styled help text with highlighted keys
+    let mut help_spans = Vec::new();
+    for (i, (key, action)) in shortcuts.iter().enumerate() {
+        // Add separator between items
+        if i > 0 {
+            help_spans.push(Span::styled(" | ", Style::new().fg(app.palette.c300)));
+        }
+        
+        // Add key with highlight
+        help_spans.push(Span::styled(
+            format!("{}", key),
+            Style::new().fg(app.palette.c500).add_modifier(Modifier::BOLD),
+        ));
+        
+        // Add description
+        help_spans.push(Span::styled(
+            format!(" {}", action),
+            Style::new().fg(app.palette.c300),
+        ));
+    }
+    
+    let help_line = Line::from(help_spans);
+    let help_paragraph = Paragraph::new(help_line)
+        .alignment(Alignment::Center);
     
     let help_area = Rect::new(
         horizontal_margin,
@@ -211,6 +244,30 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
     );
     
     f.render_widget(help_paragraph, help_area);
+    
+    // Add field-specific hints
+    if let Some(form) = &app.add_host_form {
+        let hint_text = match form.active_field {
+            0 => "Host name used to identify this connection (required)",
+            1 => "IP address or domain name to connect to (required)",
+            2 => "SSH username (optional, will use system default if empty)",
+            3 => "SSH port (optional, defaults to 22 if empty)",
+            _ => "",
+        };
+        
+        let hint_paragraph = Paragraph::new(Line::from(hint_text))
+            .alignment(Alignment::Center)
+            .style(Style::new().fg(app.palette.c200));
+        
+        let hint_area = Rect::new(
+            horizontal_margin,
+            vertical_margin + form_height + 1,
+            form_width,
+            1,
+        );
+        
+        f.render_widget(hint_paragraph, hint_area);
+    }
     
     // Show feedback message if present
     if let Some(message) = &app.feedback_message {
@@ -267,12 +324,29 @@ fn render_confirmation_ui(f: &mut Frame, app: &mut App) {
     
     f.render_widget(message_paragraph, chunks[0]);
     
-    // Render buttons
+    // Render buttons with styled keyboard shortcuts
     let action_text = app.confirm_action.as_deref().unwrap_or("Yes");
-    let buttons_text = format!("(Y) {} | (N) Cancel", action_text);
-    let buttons_paragraph = Paragraph::new(Line::from(buttons_text))
-        .alignment(Alignment::Center)
-        .style(Style::new().fg(tailwind::BLUE.c400));
+    
+    let mut button_spans = Vec::new();
+    
+    // Yes button
+    button_spans.push(Span::styled("(", Style::new().fg(tailwind::BLUE.c400)));
+    button_spans.push(Span::styled("Y", Style::new().fg(tailwind::GREEN.c500).add_modifier(Modifier::BOLD)));
+    button_spans.push(Span::styled(") ", Style::new().fg(tailwind::BLUE.c400)));
+    button_spans.push(Span::styled(action_text, Style::new().fg(tailwind::GREEN.c500)));
+    
+    // Separator
+    button_spans.push(Span::styled(" | ", Style::new().fg(tailwind::BLUE.c400)));
+    
+    // No button
+    button_spans.push(Span::styled("(", Style::new().fg(tailwind::BLUE.c400)));
+    button_spans.push(Span::styled("N", Style::new().fg(tailwind::RED.c500).add_modifier(Modifier::BOLD)));
+    button_spans.push(Span::styled(") ", Style::new().fg(tailwind::BLUE.c400)));
+    button_spans.push(Span::styled("Cancel", Style::new().fg(tailwind::RED.c500)));
+    
+    let buttons_line = Line::from(button_spans);
+    let buttons_paragraph = Paragraph::new(buttons_line)
+        .alignment(Alignment::Center);
     
     f.render_widget(buttons_paragraph, chunks[2]);
 }
