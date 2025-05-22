@@ -5,7 +5,7 @@ pub mod ui;
 
 use anyhow::Result;
 use clap::Parser;
-use ui::{App, AppConfig};
+use ui::app::{App, AppConfig};
 
 // Constants for default configuration
 const DEFAULT_SYSTEM_SSH_CONFIG: &str = "/etc/ssh/ssh_config";

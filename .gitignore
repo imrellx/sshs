@@ -19,5 +19,14 @@ result
 
 
 # Added by cargo
-
 /target
+
+# General
+.DS_Store
+.vscode/
+.idea/
+.zed/
+.claude/
+
+# Environment variables
+.env
