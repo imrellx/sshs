@@ -371,11 +371,11 @@ impl App {
                                 return Ok(AppKeyAction::Ok);
                             }
                         }
-                    } else {
-                        self.feedback_message = Some("Please fill out required fields".to_string());
-                        self.is_feedback_error = true;
-                        return Ok(AppKeyAction::Ok);
                     }
+                    
+                    self.feedback_message = Some("Please fill out required fields".to_string());
+                    self.is_feedback_error = true;
+                    return Ok(AppKeyAction::Ok);
                 }
                 Ok(AppKeyAction::Continue)
             }

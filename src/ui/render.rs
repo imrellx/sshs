@@ -1,4 +1,9 @@
-use ratatui::{prelude::*, widgets::*};
+use ratatui::{
+    prelude::*,
+    widgets::{Block, BorderType, Borders, Cell, Clear, HighlightSpacing, Padding, Paragraph, Row, Table},
+    text::{Line, Text},
+    layout::Margin,
+};
 use style::palette::tailwind;
 
 use super::app::{
@@ -42,12 +47,13 @@ fn render_main_ui(f: &mut Frame, app: &mut App) {
 }
 
 /// Render the form UI
+#[allow(clippy::too_many_lines)]
 fn render_form_ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
     
-    // Create a centered box for the form
+    // Create a centered box for the form with additional space
     let form_width = 60;
-    let form_height = 12;
+    let form_height = 14; // Increased height
     let horizontal_margin = (area.width.saturating_sub(form_width)) / 2;
     let vertical_margin = (area.height.saturating_sub(form_height)) / 2;
     
@@ -65,12 +71,14 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
         .border_style(Style::new().fg(app.palette.c400))
         .border_type(BorderType::Rounded);
     
+    // Clear the entire form area to prevent artifacts
+    f.render_widget(Clear, form_area);
     f.render_widget(form_block, form_area);
     
-    // Create inner area for form fields
+    // Create inner area for form fields with proper margins
     let inner_area = form_area.inner(Margin::new(2, 1));
     
-    // Split the inner area into form fields
+    // Split the inner area into form fields with spacing between fields
     let chunks = Layout::vertical([
         Constraint::Length(3), // Host name
         Constraint::Length(3), // Hostname/IP
@@ -80,95 +88,111 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
     .split(inner_area);
     
     if let Some(form) = &app.add_host_form {
-        // Render host name field with style
-        let host_style = Style::new().fg(
-            if form.active_field == 0 {
-                app.palette.c500
-            } else {
-                app.palette.c300
-            },
-        );
+        // Render host name field
+        let host_name_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(
+                if form.active_field == 0 {
+                    app.palette.c500
+                } else {
+                    app.palette.c300
+                },
+            ))
+            .title("Host Name (required)");
         
-        let host_name_input = Paragraph::new(form.host_name.value())
-            .style(Style::default().fg(Color::White))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(host_style)
-                    .title("Host Name (required)"),
-            );
-        f.render_widget(host_name_input, chunks[0]);
+        let host_name_area = chunks[0];
+        f.render_widget(host_name_block, host_name_area);
         
-        // Render hostname field with style
-        let hostname_style = Style::new().fg(
-            if form.active_field == 1 {
-                app.palette.c500
-            } else {
-                app.palette.c300
-            },
-        );
+        // Render the actual text content inside the block
+        let host_name_inner = host_name_area.inner(Margin::new(1, 1));
+        let host_name_text = Paragraph::new(form.host_name.value())
+            .style(Style::default().fg(Color::White));
+        f.render_widget(Clear, host_name_inner); // Clear the inner area first
+        f.render_widget(host_name_text, host_name_inner);
         
-        let hostname_input = Paragraph::new(form.hostname.value())
-            .style(Style::default().fg(Color::White))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(hostname_style)
-                    .title("Hostname/IP (required)"),
-            );
-        f.render_widget(hostname_input, chunks[1]);
+        // Render hostname field
+        let ip_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(
+                if form.active_field == 1 {
+                    app.palette.c500
+                } else {
+                    app.palette.c300
+                },
+            ))
+            .title("Hostname/IP (required)");
         
-        // Render username field with style
-        let username_style = Style::new().fg(
-            if form.active_field == 2 {
-                app.palette.c500
-            } else {
-                app.palette.c300
-            },
-        );
+        let ip_area = chunks[1];
+        f.render_widget(ip_block, ip_area);
         
-        let username_input = Paragraph::new(form.username.value())
-            .style(Style::default().fg(Color::White))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(username_style)
-                    .title("Username (optional)"),
-            );
-        f.render_widget(username_input, chunks[2]);
+        // Render the actual text content inside the block
+        let ip_inner = ip_area.inner(Margin::new(1, 1));
+        let ip_text = Paragraph::new(form.hostname.value())
+            .style(Style::default().fg(Color::White));
+        f.render_widget(Clear, ip_inner); // Clear the inner area first
+        f.render_widget(ip_text, ip_inner);
         
-        // Render port field with style
-        let port_style = Style::new().fg(
-            if form.active_field == 3 {
-                app.palette.c500
-            } else {
-                app.palette.c300
-            },
-        );
+        // Render username field
+        let username_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(
+                if form.active_field == 2 {
+                    app.palette.c500
+                } else {
+                    app.palette.c300
+                },
+            ))
+            .title("Username (optional)");
         
-        let port_input = Paragraph::new(form.port.value())
-            .style(Style::default().fg(Color::White))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(port_style)
-                    .title("Port (optional)"),
-            );
-        f.render_widget(port_input, chunks[3]);
+        let username_area = chunks[2];
+        f.render_widget(username_block, username_area);
         
-        // Set cursor position with proper padding
-        let mut cursor_position = match form.active_field {
-            0 => chunks[0].as_position(),
-            1 => chunks[1].as_position(),
-            2 => chunks[2].as_position(),
-            3 => chunks[3].as_position(),
-            _ => chunks[0].as_position(),
+        // Render the actual text content inside the block
+        let username_inner = username_area.inner(Margin::new(1, 1));
+        let username_text = Paragraph::new(form.username.value())
+            .style(Style::default().fg(Color::White));
+        f.render_widget(Clear, username_inner); // Clear the inner area first
+        f.render_widget(username_text, username_inner);
+        
+        // Render port field
+        let port_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(
+                if form.active_field == 3 {
+                    app.palette.c500
+                } else {
+                    app.palette.c300
+                },
+            ))
+            .title("Port (optional)");
+        
+        let port_area = chunks[3];
+        f.render_widget(port_block, port_area);
+        
+        // Render the actual text content inside the block
+        let port_inner = port_area.inner(Margin::new(1, 1));
+        let port_text = Paragraph::new(form.port.value())
+            .style(Style::default().fg(Color::White));
+        f.render_widget(Clear, port_inner); // Clear the inner area first
+        f.render_widget(port_text, port_inner);
+        
+        // Position cursor in active field
+        let active_inner = match form.active_field {
+            1 => chunks[1].inner(Margin::new(1, 1)),
+            2 => chunks[2].inner(Margin::new(1, 1)),
+            3 => chunks[3].inner(Margin::new(1, 1)),
+            _ => chunks[0].inner(Margin::new(1, 1)),
         };
         
-        // Adjust cursor positioning to be inside the field's borders
-        cursor_position.x += u16::try_from(form.active_input().cursor()).unwrap_or_default() + 1;
-        cursor_position.y += 1;
+        // Set cursor position with proper offset
+        let mut cursor_position = active_inner.as_position();
+        cursor_position.x += u16::try_from(form.active_input().cursor()).unwrap_or_default();
         
+        // Show cursor explicitly
         f.set_cursor_position(cursor_position);
     }
     
@@ -198,7 +222,7 @@ fn render_feedback(f: &mut Frame, message: &str, is_error: bool) {
     let area = f.area();
     
     // Create a centered box for the message
-    let message_width = 40.max(message.len() as u16 + 4);
+    let message_width = 40.max(u16::try_from(message.len()).unwrap_or(40) + 4);
     let message_height = 3;
     let horizontal_margin = (area.width.saturating_sub(message_width)) / 2;
     let vertical_margin = (area.height.saturating_sub(message_height)) / 2;
@@ -209,6 +233,9 @@ fn render_feedback(f: &mut Frame, message: &str, is_error: bool) {
         message_width,
         message_height,
     );
+    
+    // Clear the area first
+    f.render_widget(Clear, message_area);
     
     // Create a block for the message
     let message_block = Block::default()

@@ -29,6 +29,12 @@ pub struct AddHostForm {
     pub field_count: usize,
 }
 
+impl Default for AddHostForm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AddHostForm {
     /// Create a new add host form with default values
     #[must_use]
@@ -78,7 +84,6 @@ impl AddHostForm {
     #[must_use]
     pub fn active_input(&self) -> &Input {
         match self.active_field {
-            0 => &self.host_name,
             1 => &self.hostname,
             2 => &self.username,
             3 => &self.port,
@@ -89,7 +94,6 @@ impl AddHostForm {
     /// Get the current active input mutably
     pub fn active_input_mut(&mut self) -> &mut Input {
         match self.active_field {
-            0 => &mut self.host_name,
             1 => &mut self.hostname,
             2 => &mut self.username,
             3 => &mut self.port,
