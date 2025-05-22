@@ -168,7 +168,7 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
                     app.palette.c300
                 },
             ))
-            .title("Port (optional)");
+            .title("Port (optional, numbers only)");
         
         let port_area = chunks[3];
         f.render_widget(port_block, port_area);

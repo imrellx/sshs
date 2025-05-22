@@ -373,8 +373,15 @@ impl App {
                         }
                     }
                     
-                    self.feedback_message = Some("Please fill out required fields".to_string());
-                    self.is_feedback_error = true;
+                    // Show specific validation error message
+                    if let Some(error_message) = form.validation_error() {
+                        self.feedback_message = Some(error_message);
+                        self.is_feedback_error = true;
+                    } else {
+                        self.feedback_message = Some("Invalid form data".to_string());
+                        self.is_feedback_error = true;
+                    }
+                    
                     return Ok(AppKeyAction::Ok);
                 }
                 Ok(AppKeyAction::Continue)

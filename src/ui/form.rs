@@ -51,11 +51,28 @@ impl AddHostForm {
 
     /// Handle input events for the form
     pub fn handle_event(&mut self, event: &Event) {
+        // Special handling for port field to ensure numeric input only
+        if self.active_field == 3 {
+            if let Event::Key(key) = event {
+                if let crossterm::event::KeyCode::Char(c) = key.code {
+                    // Only handle numeric characters for port field
+                    if c.is_ascii_digit() || key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                        self.port.handle_event(event);
+                    }
+                    // Skip non-numeric characters
+                    return;
+                }
+                // Allow navigation keys and other special keys
+                self.port.handle_event(event);
+            }
+            return;
+        }
+        
+        // Normal handling for other fields
         match self.active_field {
             0 => { self.host_name.handle_event(event); }
             1 => { self.hostname.handle_event(event); }
             2 => { self.username.handle_event(event); }
-            3 => { self.port.handle_event(event); }
             _ => { /* Do nothing */ }
         }
     }
@@ -74,10 +91,35 @@ impl AddHostForm {
         };
     }
 
-    /// Check if the form is valid (required fields are filled)
+    /// Check if the form is valid (required fields are filled and values are valid)
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        !self.host_name.value().trim().is_empty() && !self.hostname.value().trim().is_empty()
+        // Check required fields
+        let has_required_fields = !self.host_name.value().trim().is_empty() && 
+                                 !self.hostname.value().trim().is_empty();
+        
+        // Check port is valid if provided
+        let port_valid = if !self.port.value().trim().is_empty() {
+            self.port.value().trim().parse::<u16>().is_ok()
+        } else {
+            true // Empty port is valid (will use default SSH port)
+        };
+        
+        has_required_fields && port_valid
+    }
+    
+    /// Get validation error message if form is not valid
+    #[must_use]
+    pub fn validation_error(&self) -> Option<String> {
+        if self.host_name.value().trim().is_empty() || self.hostname.value().trim().is_empty() {
+            return Some("Please fill out required fields".to_string());
+        }
+        
+        if !self.port.value().trim().is_empty() && self.port.value().trim().parse::<u16>().is_err() {
+            return Some("Port must be a valid number (0-65535)".to_string());
+        }
+        
+        None
     }
 
     /// Get the current active input
@@ -166,6 +208,30 @@ mod tests {
 
         // Insert text into hostname field
         form.hostname = Input::from("localhost".to_string());
+        assert!(form.is_valid());
+
+        // Test with valid port
+        form.port = Input::from("22".to_string());
+        assert!(form.is_valid());
+
+        // Test with invalid port (non-numeric)
+        form.port = Input::from("abc".to_string());
+        assert!(!form.is_valid());
+        assert_eq!(
+            form.validation_error(),
+            Some("Port must be a valid number (0-65535)".to_string())
+        );
+
+        // Test with invalid port (out of range)
+        form.port = Input::from("99999".to_string());
+        assert!(!form.is_valid());
+        assert_eq!(
+            form.validation_error(),
+            Some("Port must be a valid number (0-65535)".to_string())
+        );
+
+        // Test with valid port (upper range)
+        form.port = Input::from("65535".to_string());
         assert!(form.is_valid());
     }
 
