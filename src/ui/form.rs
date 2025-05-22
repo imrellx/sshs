@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use crossterm::event::Event;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use tui_input::{backend::crossterm::EventHandler, Input};
 
 /// Represents the state of the form dialog
@@ -98,6 +98,12 @@ impl AddHostForm {
         let has_required_fields = !self.host_name.value().trim().is_empty() && 
                                  !self.hostname.value().trim().is_empty();
         
+        // Check hostname format is valid
+        let hostname_valid = self.is_valid_hostname();
+        
+        // Check username format is valid
+        let username_valid = self.is_valid_username();
+        
         // Check port is valid if provided
         let port_valid = if !self.port.value().trim().is_empty() {
             self.port.value().trim().parse::<u16>().is_ok()
@@ -105,16 +111,51 @@ impl AddHostForm {
             true // Empty port is valid (will use default SSH port)
         };
         
-        has_required_fields && port_valid
+        has_required_fields && hostname_valid && username_valid && port_valid
     }
     
+    /// Validate hostname format (IP address or domain name)
+    fn is_valid_hostname(&self) -> bool {
+        let hostname = self.hostname.value().trim();
+        if hostname.is_empty() {
+            return false;
+        }
+        
+        // Simple validation - ensure hostname doesn't contain invalid characters
+        // More complex validation could check for valid domain name or IP format
+        !hostname.contains(|c: char| c.is_whitespace() || c == '?' || c == '*' || c == '#')
+    }
+    
+    /// Validate username format
+    fn is_valid_username(&self) -> bool {
+        let username = self.username.value().trim();
+        if username.is_empty() {
+            return true; // Empty username is valid (optional field)
+        }
+        
+        // Simple validation - ensure username doesn't contain invalid characters
+        !username.contains(|c: char| c.is_whitespace() || c == '/' || c == ':' || c == '\\')
+    }
+
     /// Get validation error message if form is not valid
     #[must_use]
     pub fn validation_error(&self) -> Option<String> {
+        // Check required fields
         if self.host_name.value().trim().is_empty() || self.hostname.value().trim().is_empty() {
             return Some("Please fill out required fields".to_string());
         }
         
+        // Validate hostname format
+        if !self.is_valid_hostname() {
+            return Some("Invalid hostname format".to_string());
+        }
+        
+        // Validate username format
+        if !self.is_valid_username() {
+            return Some("Invalid username format".to_string());
+        }
+        
+        // Validate port number
         if !self.port.value().trim().is_empty() && self.port.value().trim().parse::<u16>().is_err() {
             return Some("Port must be a valid number (0-65535)".to_string());
         }
@@ -143,6 +184,80 @@ impl AddHostForm {
         }
     }
 
+    /// Sanitize input to prevent security issues and ensure valid SSH config
+    fn sanitize_host_name(&self) -> String {
+        // Trim whitespace and escape any special characters in Host pattern
+        let host_name = self.host_name.value().trim();
+        
+        // If the host name doesn't have quotes already, wrap it in quotes to handle spaces
+        // If it already has quotes, use it as is (trimmed)
+        if !host_name.starts_with('"') && !host_name.ends_with('"') && host_name.contains(' ') {
+            format!("\"{}\"", host_name)
+        } else {
+            host_name.to_string()
+        }
+    }
+    
+    /// Sanitize hostname/IP value
+    fn sanitize_hostname(&self) -> String {
+        // Trim whitespace and remove any potentially problematic characters
+        self.hostname.value().trim().to_string()
+    }
+    
+    /// Sanitize username value
+    fn sanitize_username(&self) -> String {
+        // Trim whitespace and remove any potentially problematic characters
+        self.username.value().trim().to_string()
+    }
+    
+    /// Sanitize port value and return as string
+    fn sanitize_port(&self) -> Option<String> {
+        let port = self.port.value().trim();
+        if port.is_empty() {
+            None
+        } else {
+            // This is already validated to be a valid number
+            Some(port.to_string())
+        }
+    }
+    
+    /// Check if a host with the same name already exists in the SSH config file
+    /// 
+    /// # Errors
+    /// 
+    /// Will return `Err` if the file cannot be read
+    fn host_exists(&self, config_path: &str, host_name: &str) -> Result<bool> {
+        let file = File::open(config_path)
+            .map_err(|e| anyhow!("Failed to open SSH config file: {}", e))?;
+        
+        let reader = BufReader::new(file);
+        
+        // Remove quotes if they exist for comparison
+        let clean_host_name = host_name.trim_matches('"');
+        
+        // Simplified pattern matching for Host entries
+        for line in reader.lines() {
+            let line = line.map_err(|e| anyhow!("Failed to read line from SSH config file: {}", e))?;
+            let trimmed = line.trim();
+            
+            // Look for lines that start with "Host"
+            if trimmed.starts_with("Host ") {
+                // Extract the host pattern (everything after "Host ")
+                let pattern = trimmed["Host ".len()..].trim();
+                
+                // Remove quotes for comparison if they exist
+                let clean_pattern = pattern.trim_matches('"');
+                
+                // Check if the pattern matches our host name
+                if clean_pattern == clean_host_name {
+                    return Ok(true);
+                }
+            }
+        }
+        
+        Ok(false)
+    }
+
     /// Save the form data to the SSH config file
     /// 
     /// # Errors
@@ -151,24 +266,36 @@ impl AddHostForm {
     pub fn save_to_config(&self, config_path: &str) -> Result<()> {
         // First, validate if the form data is valid
         if !self.is_valid() {
-            return Err(anyhow!("Required fields are not filled"));
+            return Err(anyhow!("Form validation failed"));
         }
 
-        // Prepare the SSH config entry
-        let mut entry = format!("\nHost \"{}\"\n", self.host_name.value().trim());
-        entry.push_str(&format!("  Hostname {}\n", self.hostname.value().trim()));
+        // Sanitize inputs and prepare the SSH config entry
+        let host_name = self.sanitize_host_name();
+        let hostname = self.sanitize_hostname();
+        let username = self.sanitize_username();
+        let port = self.sanitize_port();
         
-        if !self.username.value().trim().is_empty() {
-            entry.push_str(&format!("  User {}\n", self.username.value().trim()));
+        // Build the SSH config entry
+        let mut entry = format!("\nHost {}\n", host_name);
+        entry.push_str(&format!("  Hostname {}\n", hostname));
+        
+        if let Some(username) = (!username.is_empty()).then(|| username) {
+            entry.push_str(&format!("  User {}\n", username));
         }
         
-        if !self.port.value().trim().is_empty() {
-            entry.push_str(&format!("  Port {}\n", self.port.value().trim()));
+        if let Some(port) = port {
+            entry.push_str(&format!("  Port {}\n", port));
         }
 
         // Check if the file exists
         if !std::path::Path::new(config_path).exists() {
             return Err(anyhow!("SSH config file does not exist"));
+        }
+        
+        // Check if a host with the same name already exists
+        let host_exists = self.host_exists(config_path, &host_name)?;
+        if host_exists {
+            return Err(anyhow!("A host with this name already exists in the SSH config file"));
         }
 
         // Create a backup of the original config file
@@ -233,6 +360,55 @@ mod tests {
         // Test with valid port (upper range)
         form.port = Input::from("65535".to_string());
         assert!(form.is_valid());
+        
+        // Test invalid hostname format
+        form.hostname = Input::from("invalid hostname?".to_string());
+        assert!(!form.is_valid());
+        assert_eq!(
+            form.validation_error(),
+            Some("Invalid hostname format".to_string())
+        );
+        
+        // Test invalid username format
+        form.hostname = Input::from("valid-hostname".to_string());
+        form.username = Input::from("invalid/username".to_string());
+        assert!(!form.is_valid());
+        assert_eq!(
+            form.validation_error(),
+            Some("Invalid username format".to_string())
+        );
+        
+        // Reset to valid values
+        form.hostname = Input::from("example.com".to_string());
+        form.username = Input::from("validuser".to_string());
+        assert!(form.is_valid());
+    }
+    
+    #[test]
+    fn test_sanitize_functions() {
+        let mut form = AddHostForm::new();
+        
+        // Test host name sanitization
+        form.host_name = Input::from("  Test Host  ".to_string());
+        assert_eq!(form.sanitize_host_name(), "\"Test Host\"");
+        
+        form.host_name = Input::from("NoSpaces".to_string());
+        assert_eq!(form.sanitize_host_name(), "NoSpaces");
+        
+        // Test hostname sanitization
+        form.hostname = Input::from("  example.com  ".to_string());
+        assert_eq!(form.sanitize_hostname(), "example.com");
+        
+        // Test username sanitization
+        form.username = Input::from("  user  ".to_string());
+        assert_eq!(form.sanitize_username(), "user");
+        
+        // Test port sanitization
+        form.port = Input::from("  22  ".to_string());
+        assert_eq!(form.sanitize_port(), Some("22".to_string()));
+        
+        form.port = Input::from("".to_string());
+        assert_eq!(form.sanitize_port(), None);
     }
 
     #[test]
