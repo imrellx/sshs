@@ -80,71 +80,83 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
     .split(inner_area);
     
     if let Some(form) = &app.add_host_form {
-        // Render host name field
+        // Render host name field with style
+        let host_style = Style::new().fg(
+            if form.active_field == 0 {
+                app.palette.c500
+            } else {
+                app.palette.c300
+            },
+        );
+        
         let host_name_input = Paragraph::new(form.host_name.value())
+            .style(Style::default().fg(Color::White))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::new().fg(
-                        if form.active_field == 0 {
-                            app.palette.c500
-                        } else {
-                            app.palette.c300
-                        },
-                    ))
+                    .border_style(host_style)
                     .title("Host Name (required)"),
             );
         f.render_widget(host_name_input, chunks[0]);
         
-        // Render hostname field
+        // Render hostname field with style
+        let hostname_style = Style::new().fg(
+            if form.active_field == 1 {
+                app.palette.c500
+            } else {
+                app.palette.c300
+            },
+        );
+        
         let hostname_input = Paragraph::new(form.hostname.value())
+            .style(Style::default().fg(Color::White))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::new().fg(
-                        if form.active_field == 1 {
-                            app.palette.c500
-                        } else {
-                            app.palette.c300
-                        },
-                    ))
+                    .border_style(hostname_style)
                     .title("Hostname/IP (required)"),
             );
         f.render_widget(hostname_input, chunks[1]);
         
-        // Render username field
+        // Render username field with style
+        let username_style = Style::new().fg(
+            if form.active_field == 2 {
+                app.palette.c500
+            } else {
+                app.palette.c300
+            },
+        );
+        
         let username_input = Paragraph::new(form.username.value())
+            .style(Style::default().fg(Color::White))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::new().fg(
-                        if form.active_field == 2 {
-                            app.palette.c500
-                        } else {
-                            app.palette.c300
-                        },
-                    ))
+                    .border_style(username_style)
                     .title("Username (optional)"),
             );
         f.render_widget(username_input, chunks[2]);
         
-        // Render port field
+        // Render port field with style
+        let port_style = Style::new().fg(
+            if form.active_field == 3 {
+                app.palette.c500
+            } else {
+                app.palette.c300
+            },
+        );
+        
         let port_input = Paragraph::new(form.port.value())
+            .style(Style::default().fg(Color::White))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::new().fg(
-                        if form.active_field == 3 {
-                            app.palette.c500
-                        } else {
-                            app.palette.c300
-                        },
-                    ))
+                    .border_style(port_style)
                     .title("Port (optional)"),
             );
         f.render_widget(port_input, chunks[3]);
         
-        // Set cursor position
+        // Set cursor position with proper padding
         let mut cursor_position = match form.active_field {
             0 => chunks[0].as_position(),
             1 => chunks[1].as_position(),
@@ -153,6 +165,7 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
             _ => chunks[0].as_position(),
         };
         
+        // Adjust cursor positioning to be inside the field's borders
         cursor_position.x += u16::try_from(form.active_input().cursor()).unwrap_or_default() + 1;
         cursor_position.y += 1;
         
