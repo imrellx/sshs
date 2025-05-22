@@ -472,3 +472,216 @@ pub fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
     );
     f.render_widget(info_footer, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::form::AddHostForm;
+    use crate::ui::app::{App, AppConfig};
+    use crate::searchable::Searchable;
+    use tui_input::Input;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::widgets::TableState;
+
+    /// Test helper to create a minimal app for rendering tests
+    fn create_test_app() -> App {
+        let config = AppConfig {
+            config_paths: vec!["/etc/ssh/ssh_config".to_string(), "~/.ssh/config".to_string()],
+            search_filter: None,
+            sort_by_name: true,
+            show_proxy_command: false,
+            command_template: "ssh {destination}".to_string(),
+            command_template_on_session_start: None,
+            command_template_on_session_end: None,
+            exit_after_ssh_session_ends: false,
+        };
+
+        App {
+            config,
+            search: Input::default(),
+            table_state: TableState::default(),
+            hosts: Searchable::new(Vec::new(), "", |_, _| true),
+            table_columns_constraints: vec![
+                Constraint::Length(10),
+                Constraint::Length(10),
+                Constraint::Length(10),
+                Constraint::Length(10),
+                Constraint::Length(10),
+            ],
+            palette: tailwind::BLUE,
+            add_host_form: None,
+            form_state: FormState::Hidden,
+            feedback_message: None,
+            is_feedback_error: false,
+            confirm_message: None,
+            confirm_action: None,
+        }
+    }
+
+    #[test]
+    fn test_form_ui_rendering() {
+        // Create a test backend with a fixed size
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        
+        // Create a test app with a form
+        let mut app = create_test_app();
+        app.form_state = FormState::Active;
+        app.add_host_form = Some(AddHostForm::new());
+        
+        // Draw the UI
+        terminal.draw(|f| render_form_ui(f, &mut app)).unwrap();
+        
+        // Get the buffer after rendering
+        let buffer = terminal.backend().buffer().clone();
+        
+        // Verify form title is rendered
+        assert!(buffer_contains_text(&buffer, "Add New SSH Host"));
+        
+        // Verify form field labels are rendered
+        assert!(buffer_contains_text(&buffer, "Host Name"));
+        assert!(buffer_contains_text(&buffer, "Hostname/IP"));
+        assert!(buffer_contains_text(&buffer, "Username"));
+        assert!(buffer_contains_text(&buffer, "Port"));
+        
+        // Verify help text is rendered
+        assert!(buffer_contains_text(&buffer, "Tab"));
+        assert!(buffer_contains_text(&buffer, "Next field"));
+        assert!(buffer_contains_text(&buffer, "Enter"));
+        assert!(buffer_contains_text(&buffer, "Save"));
+        
+        // Test with filled form fields
+        let mut form = AddHostForm::new();
+        form.host_name = Input::from("test-host".to_string());
+        form.hostname = Input::from("example.com".to_string());
+        form.username = Input::from("user".to_string());
+        form.port = Input::from("22".to_string());
+        
+        app.add_host_form = Some(form);
+        
+        // Draw the UI again
+        terminal.draw(|f| render_form_ui(f, &mut app)).unwrap();
+        
+        // Get the buffer after rendering
+        let buffer = terminal.backend().buffer().clone();
+        
+        // Verify form field values are rendered
+        assert!(buffer_contains_text(&buffer, "test-host"));
+        assert!(buffer_contains_text(&buffer, "example.com"));
+        assert!(buffer_contains_text(&buffer, "user"));
+        assert!(buffer_contains_text(&buffer, "22"));
+    }
+    
+    #[test]
+    fn test_confirmation_dialog_rendering() {
+        // Create a test backend with a fixed size
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        
+        // Create a test app with a confirmation dialog
+        let mut app = create_test_app();
+        app.form_state = FormState::Confirming;
+        app.add_host_form = Some(AddHostForm::new());
+        app.confirm_message = Some("Host 'test-host' already exists. Overwrite?".to_string());
+        app.confirm_action = Some("Overwrite".to_string());
+        
+        // Draw the UI
+        terminal.draw(|f| render_confirmation_ui(f, &mut app)).unwrap();
+        
+        // Get the buffer after rendering
+        let buffer = terminal.backend().buffer().clone();
+        
+        // Verify confirmation dialog elements are rendered
+        assert!(buffer_contains_text(&buffer, "Confirmation Required"));
+        assert!(buffer_contains_text(&buffer, "Host 'test-host' already exists"));
+        assert!(buffer_contains_text(&buffer, "Overwrite"));
+        assert!(buffer_contains_text(&buffer, "Cancel"));
+        assert!(buffer_contains_text(&buffer, "(Y)"));
+        assert!(buffer_contains_text(&buffer, "(N)"));
+    }
+    
+    #[test]
+    fn test_feedback_message_rendering() {
+        // Create a test backend with a fixed size
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        
+        // Create a test app with a success message
+        let mut app = create_test_app();
+        app.form_state = FormState::Active;
+        app.add_host_form = Some(AddHostForm::new());
+        app.feedback_message = Some("Host added successfully!".to_string());
+        app.is_feedback_error = false;
+        
+        // Draw the UI
+        terminal.draw(|f| render_form_ui(f, &mut app)).unwrap();
+        
+        // Get the buffer after rendering
+        let buffer = terminal.backend().buffer().clone();
+        
+        // Verify success message is rendered
+        assert!(buffer_contains_text(&buffer, "Host added successfully!"));
+        
+        // Create a test app with an error message
+        let mut app = create_test_app();
+        app.form_state = FormState::Active;
+        app.add_host_form = Some(AddHostForm::new());
+        app.feedback_message = Some("Invalid hostname format".to_string());
+        app.is_feedback_error = true;
+        
+        // Draw the UI again
+        terminal.draw(|f| render_form_ui(f, &mut app)).unwrap();
+        
+        // Get the buffer after rendering
+        let buffer = terminal.backend().buffer().clone();
+        
+        // Verify error message is rendered
+        assert!(buffer_contains_text(&buffer, "Invalid hostname format"));
+    }
+    
+    #[test]
+    fn test_form_field_navigation() {
+        // Create a test backend with a fixed size
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        
+        // Create a test app with a form
+        let mut app = create_test_app();
+        app.form_state = FormState::Active;
+        
+        // Test with different active fields
+        for field_idx in 0..4 {
+            let mut form = AddHostForm::new();
+            form.active_field = field_idx;
+            app.add_host_form = Some(form);
+            
+            // Draw the UI
+            terminal.draw(|f| render_form_ui(f, &mut app)).unwrap();
+            
+            // Get the buffer after rendering
+            let buffer = terminal.backend().buffer().clone();
+            
+            // Verify field-specific hint is rendered
+            match field_idx {
+                0 => assert!(buffer_contains_text(&buffer, "Host name used to identify")),
+                1 => assert!(buffer_contains_text(&buffer, "IP address or domain name")),
+                2 => assert!(buffer_contains_text(&buffer, "SSH username")),
+                3 => assert!(buffer_contains_text(&buffer, "SSH port")),
+                _ => {}
+            }
+        }
+    }
+
+    /// Helper function to check if a buffer contains specific text
+    fn buffer_contains_text(buffer: &Buffer, text: &str) -> bool {
+        let content: String = buffer
+            .content
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect::<Vec<_>>()
+            .join("");
+        
+        content.contains(text)
+    }
+}
