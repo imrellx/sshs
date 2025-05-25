@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use crossterm::event::Event;
+use std::fmt::Write as FmtWrite;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use tui_input::{backend::crossterm::EventHandler, Input};
@@ -107,10 +108,10 @@ impl AddHostForm {
         let username_valid = self.is_valid_username();
         
         // Check port is valid if provided
-        let port_valid = if !self.port.value().trim().is_empty() {
-            self.port.value().trim().parse::<u16>().is_ok()
-        } else {
+        let port_valid = if self.port.value().trim().is_empty() {
             true // Empty port is valid (will use default SSH port)
+        } else {
+            self.port.value().trim().parse::<u16>().is_ok()
         };
         
         has_required_fields && hostname_valid && username_valid && port_valid
@@ -194,7 +195,7 @@ impl AddHostForm {
         // If the host name doesn't have quotes already, wrap it in quotes to handle spaces
         // If it already has quotes, use it as is (trimmed)
         if !host_name.starts_with('"') && !host_name.ends_with('"') && host_name.contains(' ') {
-            format!("\"{}\"", host_name)
+            format!("\"{host_name}\"")
         } else {
             host_name.to_string()
         }
@@ -228,9 +229,9 @@ impl AddHostForm {
     /// # Errors
     /// 
     /// Will return `Err` if the file cannot be read
-    fn host_exists(&self, config_path: &str, host_name: &str) -> Result<bool> {
+    fn host_exists(config_path: &str, host_name: &str) -> Result<bool> {
         let file = File::open(config_path)
-            .map_err(|e| anyhow!("Failed to open SSH config file: {}", e))?;
+            .map_err(|e| anyhow!("Failed to open SSH config file: {e}"))?;
         
         let reader = BufReader::new(file);
         
@@ -243,9 +244,9 @@ impl AddHostForm {
             let trimmed = line.trim();
             
             // Look for lines that start with "Host"
-            if trimmed.starts_with("Host ") {
+            if let Some(pattern_part) = trimmed.strip_prefix("Host ") {
                 // Extract the host pattern (everything after "Host ")
-                let pattern = trimmed["Host ".len()..].trim();
+                let pattern = pattern_part.trim();
                 
                 // Remove quotes for comparison if they exist
                 let clean_pattern = pattern.trim_matches('"');
@@ -271,7 +272,7 @@ impl AddHostForm {
         }
         
         let host_name = self.sanitize_host_name();
-        let host_exists = self.host_exists(config_path, &host_name)?;
+        let host_exists = AddHostForm::host_exists(config_path, &host_name)?;
         
         Ok(host_exists)
     }
@@ -294,15 +295,16 @@ impl AddHostForm {
         let port = self.sanitize_port();
         
         // Build the SSH config entry
-        let mut entry = format!("\nHost {}\n", host_name);
-        entry.push_str(&format!("  Hostname {}\n", hostname));
+        let mut entry = String::new();
+        write!(entry, "\nHost {host_name}\n").unwrap();
+        write!(entry, "  Hostname {hostname}\n").unwrap();
         
-        if let Some(username) = (!username.is_empty()).then(|| username) {
-            entry.push_str(&format!("  User {}\n", username));
+        if let Some(username) = (!username.is_empty()).then_some(username) {
+            write!(entry, "  User {username}\n").unwrap();
         }
         
         if let Some(port) = port {
-            entry.push_str(&format!("  Port {}\n", port));
+            write!(entry, "  Port {port}\n").unwrap();
         }
 
         // Check if the file exists
@@ -313,19 +315,19 @@ impl AddHostForm {
         // Note: We no longer need to check for duplicates here, since the app handles it before calling this method
 
         // Create a backup of the original config file
-        let backup_path = format!("{}.bak", config_path);
+        let backup_path = format!("{config_path}.bak");
         fs::copy(config_path, &backup_path)
-            .map_err(|e| anyhow!("Failed to create backup of SSH config file: {}", e))?;
+            .map_err(|e| anyhow!("Failed to create backup of SSH config file: {e}"))?;
 
         // Open the file in append mode
         let mut file = OpenOptions::new()
             .append(true)
             .open(config_path)
-            .map_err(|e| anyhow!("Failed to open SSH config file: {}", e))?;
+            .map_err(|e| anyhow!("Failed to open SSH config file: {e}"))?;
 
         // Write the entry to the file
         file.write_all(entry.as_bytes())
-            .map_err(|e| anyhow!("Failed to write to SSH config file: {}", e))?;
+            .map_err(|e| anyhow!("Failed to write to SSH config file: {e}"))?;
 
         Ok(())
     }
@@ -421,7 +423,7 @@ mod tests {
         form.port = Input::from("  22  ".to_string());
         assert_eq!(form.sanitize_port(), Some("22".to_string()));
         
-        form.port = Input::from("".to_string());
+        form.port = Input::from(String::new());
         assert_eq!(form.sanitize_port(), None);
     }
 
@@ -477,7 +479,7 @@ mod tests {
         assert!(content.contains("Port 2222"));
 
         // Verify backup file was created
-        let backup_path = format!("{}.bak", temp_path);
+        let backup_path = format!("{temp_path}.bak");
         assert!(std::path::Path::new(&backup_path).exists());
 
         // Clean up

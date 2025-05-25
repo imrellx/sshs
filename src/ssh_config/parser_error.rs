@@ -6,7 +6,7 @@ pub struct UnknownEntryError {
 
 impl std::fmt::Display for UnknownEntryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Unknown entry '{}' on line: {}", self.entry, self.line)
+        write!(f, "Unknown entry '{self.entry}' on line: {self.line}")
     }
 }
 
@@ -23,9 +23,9 @@ pub enum InvalidIncludeErrorDetails {
 impl std::fmt::Display for InvalidIncludeErrorDetails {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InvalidIncludeErrorDetails::Pattern(e) => write!(f, "Invalid glob pattern: {}", e),
-            InvalidIncludeErrorDetails::Glob(e) => write!(f, "Glob matching error: {}", e),
-            InvalidIncludeErrorDetails::Io(e) => write!(f, "IO error during include: {}", e),
+            InvalidIncludeErrorDetails::Pattern(e) => write!(f, "Invalid glob pattern: {e}"),
+            InvalidIncludeErrorDetails::Glob(e) => write!(f, "Glob matching error: {e}"),
+            InvalidIncludeErrorDetails::Io(e) => write!(f, "IO error during include: {e}"),
             InvalidIncludeErrorDetails::HostsInsideHostBlock => {
                 write!(f, "Host definitions found inside host block (not allowed)")
             }
@@ -52,7 +52,7 @@ pub struct InvalidIncludeError {
 
 impl std::fmt::Display for InvalidIncludeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Invalid include directive on line '{}': {}", self.line, self.details)
+        write!(f, "Invalid include directive on line '{self.line}': {self.details}")
     }
 }
 
@@ -73,10 +73,10 @@ pub enum ParseError {
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::Io(e) => write!(f, "IO error: {}", e),
-            ParseError::UnparseableLine(line) => write!(f, "Unable to parse line: '{}'", line),
-            ParseError::UnknownEntry(e) => write!(f, "{}", e),
-            ParseError::InvalidInclude(e) => write!(f, "{}", e),
+            ParseError::Io(e) => write!(f, "IO error: {e}"),
+            ParseError::UnparseableLine(line) => write!(f, "Unable to parse line: '{line}'"),
+            ParseError::UnknownEntry(e) => write!(f, "{e}"),
+            ParseError::InvalidInclude(e) => write!(f, "{e}"),
         }
     }
 }

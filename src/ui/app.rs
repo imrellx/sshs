@@ -162,7 +162,7 @@ impl App {
         // This way we don't need to share the terminal between threads
         crossterm::event::read()
             .ok() // Prepare the event system, ignore initial read result
-            .and_then(|_| None::<crossterm::event::Event>); // Return None to continue
+            .and(None::<crossterm::event::Event>); // Return None to continue
 
         // Set up terminal
         safe_setup_terminal(&terminal)?;
@@ -175,11 +175,11 @@ impl App {
         
         // Handle any errors from the application run
         if let Err(err) = res {
-            eprintln!("Application error: {}", err);
+            eprintln!("Application error: {err}");
             // Also attempt to show the error cause chain for debugging
             let mut source = err.source();
             while let Some(err) = source {
-                eprintln!("Caused by: {}", err);
+                eprintln!("Caused by: {err}");
                 source = err.source();
             }
         }
@@ -205,16 +205,15 @@ impl App {
                         FormState::Hidden => {
                             let action = self.on_key_press(terminal, key)?;
                             match action {
-                                AppKeyAction::Ok => continue,
+                                AppKeyAction::Ok | AppKeyAction::Confirm => continue,
                                 AppKeyAction::Stop => break,
-                                AppKeyAction::Confirm => continue, // Should not happen in this state
                                 AppKeyAction::Continue => {}
                             }
                         }
                         FormState::Active | FormState::Confirming => {
                             let action = self.on_form_key_press(key)?;
                             match action {
-                                AppKeyAction::Ok => continue,
+                                AppKeyAction::Ok | AppKeyAction::Confirm => continue,
                                 AppKeyAction::Stop => {
                                     self.form_state = FormState::Hidden;
                                     self.add_host_form = None;
@@ -222,7 +221,6 @@ impl App {
                                     self.confirm_action = None;
                                     continue;
                                 }
-                                AppKeyAction::Confirm => continue,
                                 AppKeyAction::Continue => {}
                             }
                         }
@@ -306,7 +304,7 @@ impl App {
 
                 if let Err(e) = safe_restore_terminal(terminal) {
                     // Even if restore fails, we should try to continue
-                    eprintln!("Warning: Failed to restore terminal: {}", e);
+                    eprintln!("Warning: Failed to restore terminal: {e}");
                 }
 
                 if let Some(template) = &self.config.command_template_on_session_start {
@@ -321,7 +319,7 @@ impl App {
 
                 if let Err(e) = safe_setup_terminal(terminal) {
                     // If we can't restore the terminal, we should exit
-                    eprintln!("Fatal error: Failed to setup terminal: {}", e);
+                    eprintln!("Fatal error: Failed to setup terminal: {e}");
                     return Err(e);
                 }
 
@@ -393,7 +391,7 @@ impl App {
                             return Ok(AppKeyAction::Ok);
                         }
                         Err(e) => {
-                            self.feedback_message = Some(format!("Error: {}", e));
+                            self.feedback_message = Some(format!("Error: {e}"));
                             self.is_feedback_error = true;
                             self.confirm_message = None;
                             self.confirm_action = None;
@@ -437,7 +435,7 @@ impl App {
                                         return Ok(AppKeyAction::Ok);
                                     }
                                     Err(e) => {
-                                        self.feedback_message = Some(format!("Error: {}", e));
+                                        self.feedback_message = Some(format!("Error: {e}"));
                                         self.is_feedback_error = true;
                                         return Ok(AppKeyAction::Ok);
                                     }
@@ -445,7 +443,7 @@ impl App {
                             },
                             Err(e) => {
                                 // Error checking for duplicates
-                                self.feedback_message = Some(format!("Error checking for duplicates: {}", e));
+                                self.feedback_message = Some(format!("Error checking for duplicates: {e}"));
                                 self.is_feedback_error = true;
                                 return Ok(AppKeyAction::Ok);
                             }
@@ -657,6 +655,11 @@ impl App {
 }
 
 // Better error handling for terminal setup/teardown
+///
+/// # Errors
+///
+/// This function will return an error if enabling raw mode, entering the alternate screen,
+/// enabling mouse capture, or other terminal setup IO operations fail.
 pub fn safe_setup_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
 where
     B: Backend + std::io::Write,
@@ -687,6 +690,13 @@ where
     Ok(())
 }
 
+///
+/// # Errors
+///
+/// This function will return an error if disabling raw mode, leaving the alternate screen,
+/// disabling mouse capture, showing the cursor, clearing the terminal, or other terminal
+/// restoration IO operations fail. If multiple errors occur during restoration,
+/// they will be collected and returned as a combined error message.
 pub fn safe_restore_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
 where
     B: Backend + std::io::Write,
@@ -696,12 +706,12 @@ where
     
     // Try to clear terminal
     if let Err(e) = terminal.borrow_mut().clear() {
-        errors.push(format!("Failed to clear terminal: {}", e));
+        errors.push(format!("Failed to clear terminal: {e}"));
     }
     
     // Try to disable raw mode - very important to restore
     if let Err(e) = disable_raw_mode() {
-        errors.push(format!("Failed to disable raw mode: {}", e));
+        errors.push(format!("Failed to disable raw mode: {e}"));
     }
     
     // Try to restore terminal state
@@ -710,17 +720,17 @@ where
         
         // Show cursor
         if let Err(e) = execute!(terminal_ref.backend_mut(), Show) {
-            errors.push(format!("Failed to show cursor: {}", e));
+            errors.push(format!("Failed to show cursor: {e}"));
         }
         
         // Leave alternate screen
         if let Err(e) = execute!(terminal_ref.backend_mut(), LeaveAlternateScreen) {
-            errors.push(format!("Failed to leave alternate screen: {}", e));
+            errors.push(format!("Failed to leave alternate screen: {e}"));
         }
         
         // Disable mouse capture
         if let Err(e) = execute!(terminal_ref.backend_mut(), DisableMouseCapture) {
-            errors.push(format!("Failed to disable mouse capture: {}", e));
+            errors.push(format!("Failed to disable mouse capture: {e}"));
         }
     }
     
