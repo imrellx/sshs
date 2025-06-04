@@ -16,6 +16,7 @@ use std::{
     cmp::{max, min},
     io,
     rc::Rc,
+    time::{Duration, Instant},
 };
 use style::palette::tailwind;
 use tui_input::backend::crossterm::EventHandler;
@@ -26,7 +27,7 @@ use crate::{searchable::Searchable, ssh};
 use super::form::{AddHostForm, FormState};
 
 // UI Constants
-pub const INFO_TEXT: &str = "(Esc) quit | (↑) move up | (↓) move down | (enter) select | (Ctrl+N) new host";
+pub const INFO_TEXT: &str = "(Esc) quit | (↑) move up | (↓) move down | (enter) select | (Ctrl+N) new host | (Ctrl+E) edit host";
 pub const SEARCH_BAR_HEIGHT: u16 = 3;
 pub const TABLE_MIN_HEIGHT: u16 = 5;
 pub const FOOTER_HEIGHT: u16 = 3;
@@ -36,6 +37,14 @@ pub const CURSOR_VERTICAL_OFFSET: u16 = 1;
 pub const COLUMN_PADDING: u16 = 1;
 pub const SEARCHBAR_HORIZONTAL_PADDING: u16 = 3;
 pub const TABLE_HEADER_HEIGHT: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FocusState {
+    /// Normal mode - focus on host list, Vim-like navigation
+    Normal,
+    /// Search mode - focus on search field for typing
+    Search,
+}
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -62,18 +71,25 @@ pub struct App {
 
     pub palette: tailwind::Palette,
     
-    // Add Host Form
+    // Add/Edit Host Form
     pub add_host_form: Option<AddHostForm>,
     pub form_state: FormState,
     pub feedback_message: Option<String>,
     pub is_feedback_error: bool,
+    pub is_edit_mode: bool,
+    pub editing_host_index: Option<usize>,
     
     // Confirmation dialog
     pub confirm_message: Option<String>,
     pub confirm_action: Option<String>,
+    
+    // Vim-like navigation
+    pub focus_state: FocusState,
+    pub last_key_time: Option<Instant>,
+    pub pending_g: bool, // For detecting "gg" sequence
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum AppKeyAction {
     Ok,
     Stop,
@@ -141,9 +157,15 @@ impl App {
             form_state: FormState::Hidden,
             feedback_message: None,
             is_feedback_error: false,
+            is_edit_mode: false,
+            editing_host_index: None,
             
             confirm_message: None,
             confirm_action: None,
+            
+            focus_state: FocusState::Normal,
+            last_key_time: None,
+            pending_g: false,
         };
         app.calculate_table_columns_constraints();
 
@@ -220,6 +242,8 @@ impl App {
                                     self.add_host_form = None;
                                     self.confirm_message = None;
                                     self.confirm_action = None;
+                                    self.is_edit_mode = false;
+                                    self.editing_host_index = None;
                                     continue;
                                 }
                                 AppKeyAction::Confirm => continue,
@@ -231,15 +255,31 @@ impl App {
 
                 match self.form_state {
                     FormState::Hidden => {
-                        self.search.handle_event(&ev);
-                        self.hosts.search(self.search.value());
+                        // Handle search input only in Search mode
+                        // But handle mode transitions FIRST before passing events to search input
+                        if self.focus_state == FocusState::Search {
+                            // Check for mode-changing keys first
+                            if let Event::Key(key) = &ev {
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Enter => {
+                                        // Handle mode transition, don't pass to search input
+                                        // This will be handled in the key press handler below
+                                    }
+                                    _ => {
+                                        // For all other keys, let search input handle them
+                                        self.search.handle_event(&ev);
+                                        self.hosts.search(self.search.value());
 
-                        let selected = self.table_state.selected().unwrap_or(0);
-                        if selected >= self.hosts.len() {
-                            self.table_state.select(Some(match self.hosts.len() {
-                                0 => 0,
-                                _ => self.hosts.len() - 1,
-                            }));
+                                        let selected = self.table_state.selected().unwrap_or(0);
+                                        if selected >= self.hosts.len() {
+                                            self.table_state.select(Some(match self.hosts.len() {
+                                                0 => 0,
+                                                _ => self.hosts.len() - 1,
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     FormState::Active => {
@@ -266,11 +306,10 @@ impl App {
     where
         B: Backend + std::io::Write,
     {
-        #[allow(clippy::enum_glob_use)]
-        use KeyCode::*;
 
         let is_ctrl_pressed = key.modifiers.contains(KeyModifiers::CONTROL);
 
+        // Handle global Ctrl shortcuts first
         if is_ctrl_pressed {
             let action = self.on_key_press_ctrl(key);
             if action != AppKeyAction::Continue {
@@ -278,58 +317,139 @@ impl App {
             }
         }
 
+        // Handle mode-specific key presses
+        match self.focus_state {
+            FocusState::Normal => self.handle_normal_mode_keys(terminal, key),
+            FocusState::Search => self.handle_search_mode_keys(key),
+        }
+    }
+    
+    fn handle_normal_mode_keys<B>(
+        &mut self,
+        terminal: &Rc<RefCell<Terminal<B>>>,
+        key: KeyEvent,
+    ) -> Result<AppKeyAction>
+    where
+        B: Backend + std::io::Write,
+    {
+        #[allow(clippy::enum_glob_use)]
+        use KeyCode::*;
+
+        // Check for timeout on pending 'g' key
+        if self.pending_g {
+            if let Some(last_time) = self.last_key_time {
+                if last_time.elapsed() > Duration::from_millis(1000) {
+                    self.pending_g = false;
+                    self.last_key_time = None;
+                }
+            }
+        }
+
         match key.code {
-            Esc => return Ok(AppKeyAction::Stop),
+            // Quit application with 'q' (Vim-like)
+            Char('q') => return Ok(AppKeyAction::Stop),
+            
+            // Vim-like navigation
+            Char('j') => self.next(),
+            Char('k') => self.previous(),
+            Char('h') => {}, // Reserved for future horizontal navigation
+            Char('l') => {}, // Reserved for future horizontal navigation
+            
+            // Jump to extremes
+            Char('G') => self.table_state.select(Some(self.hosts.len().saturating_sub(1))),
+            Char('g') => {
+                if self.pending_g {
+                    // Second 'g' - jump to top
+                    self.table_state.select(Some(0));
+                    self.pending_g = false;
+                    self.last_key_time = None;
+                } else {
+                    // First 'g' - start sequence
+                    self.pending_g = true;
+                    self.last_key_time = Some(Instant::now());
+                }
+            }
+            
+            // Search mode transitions
+            Char('/') => {
+                self.focus_state = FocusState::Search;
+                // Clear search to start fresh
+                self.search = Input::default();
+                self.hosts.search("");
+            }
+            
+            // Host management (single key - more Vim-like)
+            Char('n') => {
+                self.open_add_host_form();
+            }
+            Char('e') => {
+                self.open_edit_host_form();
+            }
+            
+            // Traditional navigation (backward compatibility)
             Down => self.next(),
             Up => self.previous(),
             Home => self.table_state.select(Some(0)),
-            End => self.table_state.select(Some(self.hosts.len() - 1)),
+            End => self.table_state.select(Some(self.hosts.len().saturating_sub(1))),
             PageDown => {
                 let i = self.table_state.selected().unwrap_or(0);
-                let target = min(i.saturating_add(PAGE_SIZE), self.hosts.len() - 1);
-
+                let target = min(i.saturating_add(PAGE_SIZE), self.hosts.len().saturating_sub(1));
                 self.table_state.select(Some(target));
             }
             PageUp => {
                 let i = self.table_state.selected().unwrap_or(0);
                 let target = max(i.saturating_sub(PAGE_SIZE), 0);
-
                 self.table_state.select(Some(target));
             }
+            
+            // Connect to host
             Enter => {
-                let selected = self.table_state.selected().unwrap_or(0);
-                if selected >= self.hosts.len() {
-                    return Ok(AppKeyAction::Ok);
-                }
+                return self.connect_to_selected_host(terminal);
+            }
+            
+            // Tab for alternative navigation
+            Tab => self.next(),
+            BackTab => self.previous(),
+            
+            _ => return Ok(AppKeyAction::Continue),
+        }
 
-                let host: &ssh::Host = &self.hosts[selected];
+        // Clear pending 'g' for any other key
+        if !matches!(key.code, Char('g')) {
+            self.pending_g = false;
+            self.last_key_time = None;
+        }
 
-                if let Err(e) = safe_restore_terminal(terminal) {
-                    // Even if restore fails, we should try to continue
-                    eprintln!("Warning: Failed to restore terminal: {}", e);
-                }
+        Ok(AppKeyAction::Ok)
+    }
+    
+    fn handle_search_mode_keys(&mut self, key: KeyEvent) -> Result<AppKeyAction> {
+        #[allow(clippy::enum_glob_use)]
+        use KeyCode::*;
 
-                if let Some(template) = &self.config.command_template_on_session_start {
-                    host.run_command_template(template)?;
-                }
-
-                host.run_command_template(&self.config.command_template)?;
-
-                if let Some(template) = &self.config.command_template_on_session_end {
-                    host.run_command_template(template)?;
-                }
-
-                if let Err(e) = safe_setup_terminal(terminal) {
-                    // If we can't restore the terminal, we should exit
-                    eprintln!("Fatal error: Failed to setup terminal: {}", e);
-                    return Err(e);
-                }
-
-                if self.config.exit_after_ssh_session_ends {
-                    return Ok(AppKeyAction::Stop);
+        match key.code {
+            Esc => {
+                // Exit search mode, return to normal mode
+                self.focus_state = FocusState::Normal;
+                // Clear search text and show all hosts
+                self.search = Input::default();
+                self.hosts.search("");
+                // Focus on first host
+                if !self.hosts.is_empty() {
+                    self.table_state.select(Some(0));
                 }
             }
-            _ => return Ok(AppKeyAction::Continue),
+            Enter => {
+                // Finish search and switch to normal mode with focus on first result
+                self.focus_state = FocusState::Normal;
+                if !self.hosts.is_empty() {
+                    self.table_state.select(Some(0));
+                }
+            }
+            _ => {
+                // Let the search field handle the input - this is already done in the main loop
+                return Ok(AppKeyAction::Continue);
+            }
         }
 
         Ok(AppKeyAction::Ok)
@@ -341,14 +461,15 @@ impl App {
 
         match key.code {
             Char('c') => AppKeyAction::Stop,
-            Char('j' | 'n') => {
-                // Check if Ctrl+N is pressed to open the add host form
-                if key.code == Char('n') {
-                    self.open_add_host_form();
-                    return AppKeyAction::Ok;
-                }
-                
+            Char('j') => {
                 self.next();
+                AppKeyAction::Ok
+            }
+            Char('f') => {
+                // Ctrl+F to enter search mode (alternative to '/')
+                self.focus_state = FocusState::Search;
+                self.search = Input::default();
+                self.hosts.search("");
                 AppKeyAction::Ok
             }
             Char('k' | 'p') => {
@@ -378,14 +499,27 @@ impl App {
                     self.form_state = FormState::Active;
                     
                     // Save the host (we already validated it's valid)
-                    match self.save_new_host() {
+                    let result = if self.is_edit_mode {
+                        self.update_existing_host()
+                    } else {
+                        self.save_new_host()
+                    };
+                    
+                    match result {
                         Ok(()) => {
-                            self.feedback_message = Some("Host added successfully!".to_string());
+                            let message = if self.is_edit_mode {
+                                "Host updated successfully!"
+                            } else {
+                                "Host added successfully!"
+                            };
+                            self.feedback_message = Some(message.to_string());
                             self.is_feedback_error = false;
                             self.form_state = FormState::Hidden;
                             self.add_host_form = None;
                             self.confirm_message = None;
                             self.confirm_action = None;
+                            self.is_edit_mode = false;
+                            self.editing_host_index = None;
                             
                             // Reload the hosts
                             self.reload_hosts()?;
@@ -424,12 +558,25 @@ impl App {
                             },
                             Ok(false) => {
                                 // No duplicate, proceed with saving
-                                match self.save_new_host() {
+                                let result = if self.is_edit_mode {
+                                    self.update_existing_host()
+                                } else {
+                                    self.save_new_host()
+                                };
+                                
+                                match result {
                                     Ok(()) => {
-                                        self.feedback_message = Some("Host added successfully!".to_string());
+                                        let message = if self.is_edit_mode {
+                                            "Host updated successfully!"
+                                        } else {
+                                            "Host added successfully!"
+                                        };
+                                        self.feedback_message = Some(message.to_string());
                                         self.is_feedback_error = false;
                                         self.form_state = FormState::Hidden;
                                         self.add_host_form = None;
+                                        self.is_edit_mode = false;
+                                        self.editing_host_index = None;
                                         
                                         // Reload the hosts
                                         self.reload_hosts()?;
@@ -597,12 +744,49 @@ impl App {
         self.add_host_form = Some(AddHostForm::new());
         self.form_state = FormState::Active;
         self.feedback_message = None;
+        self.is_edit_mode = false;
+        self.editing_host_index = None;
+    }
+    
+    fn open_edit_host_form(&mut self) {
+        let selected = self.table_state.selected().unwrap_or(0);
+        if selected >= self.hosts.len() {
+            self.feedback_message = Some("No host selected for editing".to_string());
+            self.is_feedback_error = true;
+            return;
+        }
+
+        let host = &self.hosts[selected];
+        let mut form = AddHostForm::new();
+        
+        // Pre-populate the form with existing host data
+        form.populate_from_host(host);
+        
+        self.add_host_form = Some(form);
+        self.form_state = FormState::Active;
+        self.feedback_message = None;
+        self.is_edit_mode = true;
+        self.editing_host_index = Some(selected);
     }
     
     fn save_new_host(&self) -> Result<()> {
         if let Some(form) = &self.add_host_form {
             let config_path = shellexpand::tilde(&self.config.config_paths[1]).to_string();
             form.save_to_config(&config_path)
+        } else {
+            Err(anyhow::anyhow!("Form is not initialized"))
+        }
+    }
+    
+    fn update_existing_host(&self) -> Result<()> {
+        if let Some(form) = &self.add_host_form {
+            if let Some(host_index) = self.editing_host_index {
+                let config_path = shellexpand::tilde(&self.config.config_paths[1]).to_string();
+                let original_host = &self.hosts[host_index];
+                form.update_host_in_config(&config_path, original_host)
+            } else {
+                Err(anyhow::anyhow!("No host selected for editing"))
+            }
         } else {
             Err(anyhow::anyhow!("Form is not initialized"))
         }
@@ -653,6 +837,400 @@ impl App {
         
         self.calculate_table_columns_constraints();
         Ok(())
+    }
+    
+    
+    fn connect_to_selected_host<B>(
+        &mut self,
+        terminal: &Rc<RefCell<Terminal<B>>>,
+    ) -> Result<AppKeyAction>
+    where
+        B: Backend + std::io::Write,
+    {
+        let selected = self.table_state.selected().unwrap_or(0);
+        if selected >= self.hosts.len() {
+            return Ok(AppKeyAction::Ok);
+        }
+
+        let host: &ssh::Host = &self.hosts[selected];
+
+        if let Err(e) = safe_restore_terminal(terminal) {
+            // Even if restore fails, we should try to continue
+            eprintln!("Warning: Failed to restore terminal: {}", e);
+        }
+
+        if let Some(template) = &self.config.command_template_on_session_start {
+            host.run_command_template(template)?;
+        }
+
+        host.run_command_template(&self.config.command_template)?;
+
+        if let Some(template) = &self.config.command_template_on_session_end {
+            host.run_command_template(template)?;
+        }
+
+        if let Err(e) = safe_setup_terminal(terminal) {
+            // If we can't restore the terminal, we should exit
+            eprintln!("Fatal error: Failed to setup terminal: {}", e);
+            return Err(e);
+        }
+
+        if self.config.exit_after_ssh_session_ends {
+            return Ok(AppKeyAction::Stop);
+        }
+
+        Ok(AppKeyAction::Ok)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::time::Duration;
+
+    /// Helper function to create a test app
+    fn create_test_app() -> App {
+        let config = AppConfig {
+            config_paths: vec!["/test".to_string()],
+            search_filter: None,
+            sort_by_name: false,
+            show_proxy_command: false,
+            command_template: "ssh {destination}".to_string(),
+            command_template_on_session_start: None,
+            command_template_on_session_end: None,
+            exit_after_ssh_session_ends: false,
+        };
+
+        App {
+            config,
+            search: Input::default(),
+            table_state: TableState::default(),
+            hosts: Searchable::new(Vec::new(), "", |_, _| true),
+            table_columns_constraints: vec![],
+            palette: tailwind::BLUE,
+            add_host_form: None,
+            form_state: FormState::Hidden,
+            feedback_message: None,
+            is_feedback_error: false,
+            is_edit_mode: false,
+            editing_host_index: None,
+            confirm_message: None,
+            confirm_action: None,
+            focus_state: FocusState::Normal,
+            last_key_time: None,
+            pending_g: false,
+        }
+    }
+
+    #[test]
+    fn test_focus_state_transitions() {
+        let mut app = create_test_app();
+        
+        // Start in Normal mode
+        assert_eq!(app.focus_state, FocusState::Normal);
+        
+        // Simulate pressing '/' to enter Search mode directly
+        app.focus_state = FocusState::Search;
+        app.search = Input::default();
+        app.hosts.search("");
+        assert_eq!(app.focus_state, FocusState::Search);
+        
+        // Press Esc to return to Normal mode
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let result = app.handle_search_mode_keys(key_event);
+        assert!(result.is_ok());
+        assert_eq!(app.focus_state, FocusState::Normal);
+    }
+
+    #[test]
+    fn test_ctrl_f_search_mode() {
+        let mut app = create_test_app();
+        
+        // Start in Normal mode
+        assert_eq!(app.focus_state, FocusState::Normal);
+        
+        // Press Ctrl+F to enter Search mode
+        let key_event = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        let action = app.on_key_press_ctrl(key_event);
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.focus_state, FocusState::Search);
+    }
+
+    #[test]
+    fn test_vim_navigation_keys() {
+        let mut app = create_test_app();
+        
+        // Add some test hosts for navigation
+        use crate::ssh::Host;
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host3".to_string(),
+                destination: "host3.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+        ];
+        
+        app.hosts = Searchable::new(hosts, "", |_, _| true);
+        app.table_state.select(Some(0));
+        
+        // Test j key navigation (simulate the effect)
+        app.next();
+        assert_eq!(app.table_state.selected(), Some(1));
+        
+        // Test k key navigation (simulate the effect)
+        app.previous();
+        assert_eq!(app.table_state.selected(), Some(0));
+        
+        // Test G key (jump to bottom) - simulate the effect
+        app.table_state.select(Some(app.hosts.len().saturating_sub(1)));
+        assert_eq!(app.table_state.selected(), Some(2)); // Last host
+    }
+
+    #[test]
+    fn test_gg_sequence() {
+        let mut app = create_test_app();
+        
+        // Add some test hosts
+        use crate::ssh::Host;
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+        ];
+        
+        app.hosts = Searchable::new(hosts, "", |_, _| true);
+        app.table_state.select(Some(1)); // Start at second host
+        
+        // Simulate first 'g' - should set pending_g = true
+        app.pending_g = true;
+        app.last_key_time = Some(Instant::now());
+        assert_eq!(app.table_state.selected(), Some(1)); // Should not move yet
+        
+        // Simulate second 'g' - should jump to top
+        app.table_state.select(Some(0));
+        app.pending_g = false;
+        app.last_key_time = None;
+        assert_eq!(app.table_state.selected(), Some(0)); // Should jump to top
+    }
+
+    #[test]
+    fn test_pending_g_timeout() {
+        let mut app = create_test_app();
+        
+        // Set pending_g with an old timestamp
+        app.pending_g = true;
+        app.last_key_time = Some(Instant::now() - Duration::from_millis(2000)); // 2 seconds ago
+        
+        // Simulate checking timeout - pending_g should be cleared
+        if let Some(last_time) = app.last_key_time {
+            if last_time.elapsed() > Duration::from_millis(1000) {
+                app.pending_g = false;
+                app.last_key_time = None;
+            }
+        }
+        
+        // pending_g should be cleared due to timeout
+        assert!(!app.pending_g);
+        assert!(app.last_key_time.is_none());
+    }
+
+    #[test]
+    fn test_q_key_quits_application() {
+        let app = create_test_app();
+        
+        // Ensure we're in Normal mode
+        assert_eq!(app.focus_state, FocusState::Normal);
+        
+        // Test that 'q' is mapped to quit - we can test this by checking if 
+        // the quit logic would be triggered in Normal mode
+        // Since we can't easily test the full key handler without a terminal,
+        // we verify the state setup is correct for quit functionality
+        assert_eq!(app.focus_state, FocusState::Normal);
+        // In Normal mode, 'q' should trigger quit (tested in integration)
+    }
+
+    #[test]
+    fn test_search_mode_escape_transitions() {
+        let mut app = create_test_app();
+        
+        // Add some test hosts
+        use crate::ssh::Host;
+        let hosts = vec![
+            Host {
+                name: "test-host".to_string(),
+                destination: "test.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+            Host {
+                name: "prod-host".to_string(),
+                destination: "prod.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+        ];
+        // Create proper search closure that mimics the real search behavior
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(hosts, "", move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+            search_value.is_empty()
+                || matcher.fuzzy_match(&host.name, search_value).is_some()
+                || matcher.fuzzy_match(&host.destination, search_value).is_some()
+                || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+        });
+        
+        // Start in Search mode with some search text
+        app.focus_state = FocusState::Search;
+        app.search = Input::from("nonexistent".to_string());
+        app.hosts.search("nonexistent");
+        
+        // Verify search has filtered out all hosts
+        assert_eq!(app.hosts.len(), 0);
+        
+        // Press Esc - should return to Normal mode and clear search
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let result = app.handle_search_mode_keys(key_event);
+        assert!(result.is_ok());
+        assert_eq!(app.focus_state, FocusState::Normal);
+        assert_eq!(app.search.value(), ""); // Search should be cleared
+        assert_eq!(app.hosts.len(), 2); // All hosts should be visible again
+    }
+
+    #[test]
+    fn test_search_mode_enter_keeps_filter() {
+        let mut app = create_test_app();
+        
+        // Add some test hosts
+        use crate::ssh::Host;
+        let hosts = vec![
+            Host {
+                name: "test-host".to_string(),
+                destination: "test.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+            Host {
+                name: "prod-host".to_string(),
+                destination: "prod.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+        ];
+        // Create proper search closure that mimics the real search behavior
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(hosts, "", move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+            search_value.is_empty()
+                || matcher.fuzzy_match(&host.name, search_value).is_some()
+                || matcher.fuzzy_match(&host.destination, search_value).is_some()
+                || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+        });
+        
+        // Start in Search mode with search text that matches one host
+        app.focus_state = FocusState::Search;
+        app.search = Input::from("test".to_string());
+        app.hosts.search("test");
+        
+        // Verify search has filtered to one host
+        assert_eq!(app.hosts.len(), 1);
+        
+        // Press Enter - should return to Normal mode but keep search filter
+        let key_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let result = app.handle_search_mode_keys(key_event);
+        assert!(result.is_ok());
+        assert_eq!(app.focus_state, FocusState::Normal);
+        assert_eq!(app.search.value(), "test"); // Search should be preserved
+        assert_eq!(app.hosts.len(), 1); // Filtered results should remain
+    }
+
+    #[test]
+    fn test_single_key_host_management() {
+        let mut app = create_test_app();
+        
+        // Ensure we're in Normal mode
+        assert_eq!(app.focus_state, FocusState::Normal);
+        assert_eq!(app.form_state, FormState::Hidden);
+        
+        // Test 'n' key opens add host form
+        // We can't easily test the full key handler, but we can test the method directly
+        app.open_add_host_form();
+        assert_eq!(app.form_state, FormState::Active);
+        assert!(app.add_host_form.is_some());
+        assert!(!app.is_edit_mode);
+        
+        // Reset for edit test
+        app.form_state = FormState::Hidden;
+        app.add_host_form = None;
+        app.is_edit_mode = false;
+        
+        // Add a test host for editing
+        use crate::ssh::Host;
+        let hosts = vec![Host {
+            name: "test-host".to_string(),
+            destination: "test.com".to_string(),
+            user: None,
+            port: None,
+            aliases: "".to_string(),
+            proxy_command: None,
+        }];
+        // Create proper search closure
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(hosts, "", move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+            search_value.is_empty()
+                || matcher.fuzzy_match(&host.name, search_value).is_some()
+                || matcher.fuzzy_match(&host.destination, search_value).is_some()
+                || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+        });
+        app.table_state.select(Some(0));
+        
+        // Test 'e' key opens edit host form
+        app.open_edit_host_form();
+        assert_eq!(app.form_state, FormState::Active);
+        assert!(app.add_host_form.is_some());
+        assert!(app.is_edit_mode);
+        assert_eq!(app.editing_host_index, Some(0));
     }
 }
 

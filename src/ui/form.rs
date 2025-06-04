@@ -3,9 +3,10 @@ use crossterm::event::Event;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use tui_input::{backend::crossterm::EventHandler, Input};
+use crate::ssh;
 
 /// Represents the state of the form dialog
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum FormState {
     /// Form is hidden
     Hidden,
@@ -329,6 +330,115 @@ impl AddHostForm {
 
         Ok(())
     }
+    
+    /// Populate the form with data from an existing SSH host
+    pub fn populate_from_host(&mut self, host: &ssh::Host) {
+        self.host_name = Input::from(host.name.clone());
+        self.hostname = Input::from(host.destination.clone());
+        
+        if let Some(user) = &host.user {
+            self.username = Input::from(user.clone());
+        }
+        
+        if let Some(port) = &host.port {
+            self.port = Input::from(port.clone());
+        }
+    }
+    
+    /// Update an existing host entry in the SSH config file
+    /// 
+    /// # Errors
+    /// 
+    /// Will return `Err` if the file cannot be read or written to
+    pub fn update_host_in_config(&self, config_path: &str, original_host: &ssh::Host) -> Result<()> {
+        // First, validate if the form data is valid
+        if !self.is_valid() {
+            return Err(anyhow!("Form validation failed"));
+        }
+
+        // Read the entire config file
+        let content = fs::read_to_string(config_path)
+            .map_err(|e| anyhow!("Failed to read SSH config file: {}", e))?;
+
+        // Create a backup of the original config file
+        let backup_path = format!("{}.bak", config_path);
+        fs::copy(config_path, &backup_path)
+            .map_err(|e| anyhow!("Failed to create backup of SSH config file: {}", e))?;
+
+        // Find and replace the host entry
+        let updated_content = self.replace_host_entry(&content, original_host)?;
+
+        // Write the updated content back to the file
+        fs::write(config_path, updated_content)
+            .map_err(|e| anyhow!("Failed to write updated SSH config file: {}", e))?;
+
+        Ok(())
+    }
+    
+    /// Replace a host entry in the SSH config content
+    fn replace_host_entry(&self, content: &str, original_host: &ssh::Host) -> Result<String> {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+        
+        // Find the host entry to replace
+        while i < lines.len() {
+            let line = lines[i].trim();
+            
+            // Look for Host lines that match our original host name
+            if line.starts_with("Host ") {
+                let pattern = line["Host ".len()..].trim();
+                let clean_pattern = pattern.trim_matches('"');
+                
+                if clean_pattern == original_host.name {
+                    // Found the host entry to replace
+                    // Skip this host block and add our new one
+                    i += 1;
+                    
+                    // Skip all lines until the next Host block or end of file
+                    while i < lines.len() {
+                        let next_line = lines[i].trim();
+                        if next_line.starts_with("Host ") && !next_line.is_empty() {
+                            break;
+                        }
+                        i += 1;
+                    }
+                    
+                    // Add the new host entry
+                    let new_entry = self.build_host_entry();
+                    result.push(new_entry);
+                    
+                    continue;
+                }
+            }
+            
+            result.push(lines[i].to_string());
+            i += 1;
+        }
+        
+        Ok(result.join("\n"))
+    }
+    
+    /// Build a complete host entry string
+    fn build_host_entry(&self) -> String {
+        let host_name = self.sanitize_host_name();
+        let hostname = self.sanitize_hostname();
+        let username = self.sanitize_username();
+        let port = self.sanitize_port();
+        
+        let mut entry = format!("Host {}", host_name);
+        entry.push_str(&format!("\n  Hostname {}", hostname));
+        
+        if !username.is_empty() {
+            entry.push_str(&format!("\n  User {}", username));
+        }
+        
+        if let Some(port) = port {
+            entry.push_str(&format!("\n  Port {}", port));
+        }
+        
+        entry
+    }
 }
 
 #[cfg(test)]
@@ -498,5 +608,92 @@ mod tests {
         // Save should fail due to missing required fields
         let result = form.save_to_config(&temp_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_populate_from_host() {
+        use crate::ssh::Host;
+        
+        let mut form = AddHostForm::new();
+        let host = Host {
+            name: "test-host".to_string(),
+            destination: "test.example.com".to_string(),
+            user: Some("testuser".to_string()),
+            port: Some("2222".to_string()),
+            aliases: "".to_string(),
+            proxy_command: None,
+        };
+
+        form.populate_from_host(&host);
+        
+        assert_eq!(form.host_name.value(), "test-host");
+        assert_eq!(form.hostname.value(), "test.example.com");
+        assert_eq!(form.username.value(), "testuser");
+        assert_eq!(form.port.value(), "2222");
+    }
+
+    #[test]
+    fn test_update_host_in_config() -> Result<()> {
+        use crate::ssh::Host;
+        
+        // Create a temporary file with existing SSH config
+        let mut temp_file = NamedTempFile::new()?;
+        let temp_path = temp_file.path().to_str().unwrap().to_owned();
+
+        // Write initial config with a host to edit
+        writeln!(temp_file, "# SSH Config File")?;
+        writeln!(temp_file, "Host old-host")?;
+        writeln!(temp_file, "  Hostname old.example.com")?;
+        writeln!(temp_file, "  User olduser")?;
+        writeln!(temp_file, "  Port 22")?;
+        writeln!(temp_file, "")?;
+        writeln!(temp_file, "Host another-host")?;
+        writeln!(temp_file, "  Hostname another.example.com")?;
+
+        // Create the original host object
+        let original_host = Host {
+            name: "old-host".to_string(),
+            destination: "old.example.com".to_string(),
+            user: Some("olduser".to_string()),
+            port: Some("22".to_string()),
+            aliases: "".to_string(),
+            proxy_command: None,
+        };
+
+        // Create a form with updated data
+        let mut form = AddHostForm::new();
+        form.host_name = Input::from("updated-host".to_string());
+        form.hostname = Input::from("updated.example.com".to_string());
+        form.username = Input::from("updateduser".to_string());
+        form.port = Input::from("2222".to_string());
+
+        // Update the host in the config file
+        form.update_host_in_config(&temp_path, &original_host)?;
+
+        // Read the updated file content
+        let content = fs::read_to_string(&temp_path)?;
+
+        // Check if the host was updated correctly
+        assert!(content.contains("Host updated-host"));
+        assert!(content.contains("Hostname updated.example.com"));
+        assert!(content.contains("User updateduser"));
+        assert!(content.contains("Port 2222"));
+        
+        // Check that other hosts are preserved
+        assert!(content.contains("Host another-host"));
+        assert!(content.contains("Hostname another.example.com"));
+        
+        // Check that old host data is removed
+        assert!(!content.contains("Host old-host"));
+        assert!(!content.contains("old.example.com"));
+
+        // Verify backup file was created
+        let backup_path = format!("{}.bak", temp_path);
+        assert!(std::path::Path::new(&backup_path).exists());
+
+        // Clean up
+        fs::remove_file(backup_path)?;
+
+        Ok(())
     }
 }

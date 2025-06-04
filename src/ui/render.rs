@@ -8,7 +8,7 @@ use style::palette::tailwind;
 
 use super::app::{
     App, CURSOR_HORIZONTAL_PADDING, CURSOR_VERTICAL_OFFSET, FOOTER_HEIGHT,
-    SEARCH_BAR_HEIGHT, SEARCHBAR_HORIZONTAL_PADDING, TABLE_HEADER_HEIGHT, INFO_TEXT,
+    SEARCH_BAR_HEIGHT, SEARCHBAR_HORIZONTAL_PADDING, TABLE_HEADER_HEIGHT,
     TABLE_MIN_HEIGHT,
 };
 use super::form::FormState;
@@ -33,18 +33,20 @@ fn render_main_ui(f: &mut Frame, app: &mut App) {
 
     render_searchbar(f, app, rects[0]);
     render_table(f, app, rects[1]);
-    render_footer(f, app, rects[2]);
+    render_footer_with_mode(f, app, rects[2]);
 
     // Show feedback message if present
     if let Some(message) = &app.feedback_message {
         render_feedback(f, message, app.is_feedback_error);
     }
 
-    let mut cursor_position = rects[0].as_position();
-    cursor_position.x += u16::try_from(app.search.cursor()).unwrap_or_default() + CURSOR_HORIZONTAL_PADDING;
-    cursor_position.y += CURSOR_VERTICAL_OFFSET;
-
-    f.set_cursor_position(cursor_position);
+    // Show cursor only in search mode
+    if matches!(app.focus_state, crate::ui::app::FocusState::Search) {
+        let mut cursor_position = rects[0].as_position();
+        cursor_position.x += u16::try_from(app.search.cursor()).unwrap_or_default() + CURSOR_HORIZONTAL_PADDING;
+        cursor_position.y += CURSOR_VERTICAL_OFFSET;
+        f.set_cursor_position(cursor_position);
+    }
 }
 
 /// Render the form UI
@@ -67,10 +69,17 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
     );
     
     // Create a block for the form with styled title
-    let title = Line::from(vec![
-        Span::styled("Add New SSH Host ", Style::new().fg(app.palette.c400)),
-        Span::styled("(Ctrl+N)", Style::new().fg(app.palette.c300).add_modifier(Modifier::ITALIC)),
-    ]);
+    let title = if app.is_edit_mode {
+        Line::from(vec![
+            Span::styled("Edit SSH Host ", Style::new().fg(app.palette.c400)),
+            Span::styled("(Ctrl+E)", Style::new().fg(app.palette.c300).add_modifier(Modifier::ITALIC)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Add New SSH Host ", Style::new().fg(app.palette.c400)),
+            Span::styled("(Ctrl+N)", Style::new().fg(app.palette.c300).add_modifier(Modifier::ITALIC)),
+        ])
+    };
     
     let form_block = Block::default()
         .title(title)
@@ -207,7 +216,7 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
     let shortcuts = [
         ("Tab", "Next field"),
         ("Shift+Tab", "Previous field"),
-        ("Enter", "Save"),
+        ("Enter", if app.is_edit_mode { "Update" } else { "Save" }),
         ("Esc", "Cancel"),
     ];
     
@@ -395,10 +404,17 @@ fn render_feedback(f: &mut Frame, message: &str, is_error: bool) {
 
 /// Render the search bar
 pub fn render_searchbar(f: &mut Frame, app: &mut App, area: Rect) {
+    // Use different styling based on focus state
+    let border_style = if matches!(app.focus_state, crate::ui::app::FocusState::Search) {
+        Style::new().fg(app.palette.c500) // Brighter when focused
+    } else {
+        Style::new().fg(app.palette.c300) // Dimmer when not focused
+    };
+    
     let info_footer = Paragraph::new(Line::from(app.search.value())).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::new().fg(app.palette.c400))
+            .border_style(border_style)
             .border_type(BorderType::Rounded)
             .padding(Padding::horizontal(SEARCHBAR_HORIZONTAL_PADDING)),
     );
@@ -462,9 +478,29 @@ pub fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(t, area, &mut app.table_state);
 }
 
-/// Render the footer
-pub fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
-    let info_footer = Paragraph::new(Line::from(INFO_TEXT)).centered().block(
+/// Render the footer with mode indicator
+pub fn render_footer_with_mode(f: &mut Frame, app: &mut App, area: Rect) {
+    let (mode_text, shortcuts_text) = match app.focus_state {
+        crate::ui::app::FocusState::Normal => {
+            let mode = "-- NORMAL --";
+            let shortcuts = "(j/k/↑/↓) navigate | (/) search | (enter) connect | (n) new | (e) edit | (q) quit";
+            (mode, shortcuts)
+        }
+        crate::ui::app::FocusState::Search => {
+            let mode = "-- SEARCH --";
+            let shortcuts = "(type to search) | (enter) keep filter | (esc) clear & exit | (Ctrl+F) also opens search";
+            (mode, shortcuts)
+        }
+    };
+    
+    // Create the footer text with mode indicator and shortcuts
+    let footer_line = Line::from(vec![
+        Span::styled(mode_text, Style::new().fg(app.palette.c500).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled(shortcuts_text, Style::new().fg(app.palette.c300)),
+    ]);
+    
+    let info_footer = Paragraph::new(footer_line).centered().block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::new().fg(app.palette.c400))
@@ -473,11 +509,16 @@ pub fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(info_footer, area);
 }
 
+/// Render the footer (legacy function - kept for compatibility)
+pub fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
+    render_footer_with_mode(f, app, area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui::form::AddHostForm;
-    use crate::ui::app::{App, AppConfig};
+    use crate::ui::app::{App, AppConfig, FocusState};
     use crate::searchable::Searchable;
     use tui_input::Input;
     use ratatui::backend::TestBackend;
@@ -514,8 +555,13 @@ mod tests {
             form_state: FormState::Hidden,
             feedback_message: None,
             is_feedback_error: false,
+            is_edit_mode: false,
+            editing_host_index: None,
             confirm_message: None,
             confirm_action: None,
+            focus_state: FocusState::Normal,
+            last_key_time: None,
+            pending_g: false,
         }
     }
 
