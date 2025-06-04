@@ -388,6 +388,9 @@ impl App {
             Char('e') => {
                 self.open_edit_host_form();
             }
+            Char('d') => {
+                self.open_delete_host_confirmation();
+            }
             
             // Traditional navigation (backward compatibility)
             Down => self.next(),
@@ -498,7 +501,33 @@ impl App {
                     return Ok(AppKeyAction::Ok);
                 },
                 Enter | Char('y') | Char('Y') => {
-                    // Proceed with saving
+                    // Check if this is a delete confirmation
+                    if let Some(action) = &self.confirm_action {
+                        if action == "Delete" {
+                            // Handle host deletion
+                            self.form_state = FormState::Hidden;
+                            let result = self.delete_selected_host();
+                            
+                            match result {
+                                Ok(()) => {
+                                    self.confirm_message = None;
+                                    self.confirm_action = None;
+                                    self.editing_host_index = None;
+                                    return Ok(AppKeyAction::Ok);
+                                }
+                                Err(e) => {
+                                    self.feedback_message = Some(format!("Error deleting host: {}", e));
+                                    self.is_feedback_error = true;
+                                    self.confirm_message = None;
+                                    self.confirm_action = None;
+                                    self.editing_host_index = None;
+                                    return Ok(AppKeyAction::Ok);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Proceed with saving (existing functionality)
                     self.form_state = FormState::Active;
                     
                     // Save the host (we already validated it's valid)
@@ -793,6 +822,118 @@ impl App {
         } else {
             Err(anyhow::anyhow!("Form is not initialized"))
         }
+    }
+    
+    fn open_delete_host_confirmation(&mut self) {
+        let selected = self.table_state.selected().unwrap_or(0);
+        if selected >= self.hosts.len() {
+            self.feedback_message = Some("No host selected for deletion".to_string());
+            self.is_feedback_error = true;
+            return;
+        }
+
+        let host = &self.hosts[selected];
+        self.confirm_message = Some(format!("Delete host '{}'? This action cannot be undone.", host.name));
+        self.confirm_action = Some("Delete".to_string());
+        self.form_state = FormState::Confirming;
+        self.editing_host_index = Some(selected);
+    }
+    
+    fn delete_selected_host(&mut self) -> Result<()> {
+        if let Some(host_index) = self.editing_host_index {
+            if host_index >= self.hosts.len() {
+                return Err(anyhow::anyhow!("Invalid host index for deletion"));
+            }
+
+            let host = self.hosts[host_index].clone();
+            let config_path = shellexpand::tilde(&self.config.config_paths[1]).to_string();
+            
+            // Delete the host from SSH config file
+            self.delete_host_from_config(&config_path, &host)?;
+            
+            // Reload hosts to refresh the list
+            self.reload_hosts()?;
+            
+            // Adjust selection if necessary
+            if host_index >= self.hosts.len() && !self.hosts.is_empty() {
+                self.table_state.select(Some(self.hosts.len() - 1));
+            } else if self.hosts.is_empty() {
+                self.table_state.select(Some(0));
+            }
+            
+            // Show success message
+            self.feedback_message = Some(format!("Host '{}' deleted successfully", host.name));
+            self.is_feedback_error = false;
+            
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("No host selected for deletion"))
+        }
+    }
+    
+    fn delete_host_from_config(&self, config_path: &str, host_to_delete: &ssh::Host) -> Result<()> {
+        use std::fs;
+        
+        // Read the current config file
+        let content = fs::read_to_string(config_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read SSH config file: {}", e))?;
+        
+        // Create a backup of the original config file
+        let backup_path = format!("{}.bak", config_path);
+        fs::copy(config_path, &backup_path)
+            .map_err(|e| anyhow::anyhow!("Failed to create backup of SSH config file: {}", e))?;
+        
+        // Parse and remove the host entry
+        let updated_content = self.remove_host_entry(&content, host_to_delete)?;
+        
+        // Write the updated content back to the file
+        fs::write(config_path, updated_content)
+            .map_err(|e| anyhow::anyhow!("Failed to write updated SSH config file: {}", e))?;
+        
+        Ok(())
+    }
+    
+    fn remove_host_entry(&self, content: &str, host_to_delete: &ssh::Host) -> Result<String> {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+        let mut found_host = false;
+        
+        while i < lines.len() {
+            let line = lines[i].trim();
+            
+            // Look for Host lines that match our target host name
+            if line.starts_with("Host ") {
+                let pattern = line["Host ".len()..].trim();
+                let clean_pattern = pattern.trim_matches('"');
+                
+                if clean_pattern == host_to_delete.name {
+                    found_host = true;
+                    // Skip this host block
+                    i += 1;
+                    
+                    // Skip all lines until the next Host block or end of file
+                    while i < lines.len() {
+                        let next_line = lines[i].trim();
+                        if next_line.starts_with("Host ") && !next_line.is_empty() {
+                            break;
+                        }
+                        i += 1;
+                    }
+                    
+                    continue;
+                }
+            }
+            
+            result.push(lines[i].to_string());
+            i += 1;
+        }
+        
+        if !found_host {
+            return Err(anyhow::anyhow!("Host '{}' not found in SSH config file", host_to_delete.name));
+        }
+        
+        Ok(result.join("\n"))
     }
     
     fn reload_hosts(&mut self) -> Result<()> {
@@ -1398,6 +1539,55 @@ mod tests {
         assert_eq!(app.focus_state, FocusState::Normal);
         assert_eq!(app.search.value(), "test"); // Search should be preserved
         assert_eq!(app.hosts.len(), 1); // Filtered results should remain
+    }
+
+    #[test]
+    fn test_delete_host_functionality() {
+        let mut app = create_test_app();
+        
+        // Add a test host for deletion
+        use crate::ssh::Host;
+        let hosts = vec![
+            Host {
+                name: "test-host-1".to_string(),
+                destination: "test1.example.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+            Host {
+                name: "test-host-2".to_string(),
+                destination: "test2.example.com".to_string(),
+                user: None,
+                port: None,
+                aliases: "".to_string(),
+                proxy_command: None,
+            },
+        ];
+        
+        // Create proper search closure
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(hosts, "", move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+            search_value.is_empty()
+                || matcher.fuzzy_match(&host.name, search_value).is_some()
+                || matcher.fuzzy_match(&host.destination, search_value).is_some()
+                || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+        });
+        app.table_state.select(Some(0));
+        
+        // Test opening delete confirmation
+        app.open_delete_host_confirmation();
+        assert_eq!(app.form_state, FormState::Confirming);
+        assert!(app.confirm_message.is_some());
+        assert_eq!(app.confirm_action, Some("Delete".to_string()));
+        assert_eq!(app.editing_host_index, Some(0));
+        
+        // Verify the confirmation message contains the host name
+        let confirm_msg = app.confirm_message.as_ref().unwrap();
+        assert!(confirm_msg.contains("test-host-1"));
+        assert!(confirm_msg.contains("cannot be undone"));
     }
 
     #[test]

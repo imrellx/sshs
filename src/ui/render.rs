@@ -483,7 +483,7 @@ pub fn render_footer_with_mode(f: &mut Frame, app: &mut App, area: Rect) {
     let (mode_text, shortcuts_text) = match app.focus_state {
         crate::ui::app::FocusState::Normal => {
             let mode = "-- NORMAL --";
-            let shortcuts = "(j/k/↑/↓) navigate | (/) search | (enter) connect | (n) new | (e) edit | (q) quit";
+            let shortcuts = "(j/k/↑/↓) navigate | (/) search | (enter) connect | (n) new | (e) edit | (d) delete | (q) quit";
             (mode, shortcuts)
         }
         crate::ui::app::FocusState::Search => {
