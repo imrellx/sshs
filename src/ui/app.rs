@@ -968,55 +968,34 @@ impl App {
     
     fn connect_to_ssh_host<B>(
         &mut self,
-        terminal: &Rc<RefCell<Terminal<B>>>,
+        _terminal: &Rc<RefCell<Terminal<B>>>,
         host: &ssh::Host,
     ) -> Result<(), String>
     where
         B: Backend + std::io::Write,
     {
-        // First try with existing SSH agent/keys (non-interactive)
+        // Clear screen completely before SSH
+        print!("\x1b[2J\x1b[H");
+        
+        // Build SSH command with normal authentication flow
         let user = host.user.as_deref().unwrap_or("root");
         let port = host.port.as_deref().unwrap_or("22");
         
-        // Try connecting with keys first
         let ssh_command = format!(
-            "ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -o PasswordAuthentication=no -o BatchMode=yes -p {} {}@{} exit", 
+            "ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}", 
             port, user, &host.destination
         );
         
-        let key_auth_result = Command::new("sh")
+        // Execute SSH command normally - let SSH handle authentication
+        let result = Command::new("sh")
             .arg("-c")
             .arg(&ssh_command)
-            .output();
+            .status();
             
-        match key_auth_result {
-            Ok(output) if output.status.success() => {
-                // Key authentication worked, proceed with interactive SSH
-                print!("\x1b[2J\x1b[H");
-                let interactive_ssh = format!(
-                    "ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}", 
-                    port, user, &host.destination
-                );
-                
-                let result = Command::new("sh")
-                    .arg("-c")
-                    .arg(&interactive_ssh)
-                    .status();
-                    
-                match result {
-                    Ok(status) if status.success() => Ok(()),
-                    Ok(status) => Err(format!("SSH session ended with exit code: {}", status.code().unwrap_or(-1))),
-                    Err(e) => Err(format!("Failed to execute SSH command: {}", e))
-                }
-            }
-            _ => {
-                // Key authentication failed, try password authentication
-                if let Some(password) = self.show_password_dialog_and_get_input(terminal, host)? {
-                    self.connect_with_password(host, &password)
-                } else {
-                    Err("Password authentication cancelled".to_string())
-                }
-            }
+        match result {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!("SSH connection failed with exit code: {}", status.code().unwrap_or(-1))),
+            Err(e) => Err(format!("Failed to execute SSH command: {}", e))
         }
     }
     
