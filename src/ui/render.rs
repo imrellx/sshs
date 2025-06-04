@@ -555,6 +555,7 @@ mod tests {
             form_state: FormState::Hidden,
             feedback_message: None,
             is_feedback_error: false,
+            feedback_timeout: None,
             is_edit_mode: false,
             editing_host_index: None,
             confirm_message: None,

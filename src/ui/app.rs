@@ -78,6 +78,7 @@ pub struct App {
     pub form_state: FormState,
     pub feedback_message: Option<String>,
     pub is_feedback_error: bool,
+    pub feedback_timeout: Option<Instant>,
     pub is_edit_mode: bool,
     pub editing_host_index: Option<usize>,
     
@@ -160,6 +161,7 @@ impl App {
             form_state: FormState::Hidden,
             feedback_message: None,
             is_feedback_error: false,
+            feedback_timeout: None,
             is_edit_mode: false,
             editing_host_index: None,
             
@@ -220,6 +222,9 @@ impl App {
         B: Backend + std::io::Write,
     {
         loop {
+            // Check if feedback message should be cleared due to timeout
+            self.check_feedback_timeout();
+            
             terminal.borrow_mut().draw(|f| super::render::ui(f, self))?;
 
             let ev = event::read()?;
@@ -516,8 +521,7 @@ impl App {
                                     return Ok(AppKeyAction::Ok);
                                 }
                                 Err(e) => {
-                                    self.feedback_message = Some(format!("Error deleting host: {}", e));
-                                    self.is_feedback_error = true;
+                                    self.set_feedback_message(format!("Error deleting host: {}", e), true);
                                     self.confirm_message = None;
                                     self.confirm_action = None;
                                     self.editing_host_index = None;
@@ -544,8 +548,7 @@ impl App {
                             } else {
                                 "Host added successfully!"
                             };
-                            self.feedback_message = Some(message.to_string());
-                            self.is_feedback_error = false;
+                            self.set_feedback_message(message.to_string(), false);
                             self.form_state = FormState::Hidden;
                             self.add_host_form = None;
                             self.confirm_message = None;
@@ -559,8 +562,7 @@ impl App {
                             return Ok(AppKeyAction::Ok);
                         }
                         Err(e) => {
-                            self.feedback_message = Some(format!("Error: {}", e));
-                            self.is_feedback_error = true;
+                            self.set_feedback_message(format!("Error: {}", e), true);
                             self.confirm_message = None;
                             self.confirm_action = None;
                             return Ok(AppKeyAction::Ok);
@@ -603,8 +605,7 @@ impl App {
                                         } else {
                                             "Host added successfully!"
                                         };
-                                        self.feedback_message = Some(message.to_string());
-                                        self.is_feedback_error = false;
+                                        self.set_feedback_message(message.to_string(), false);
                                         self.form_state = FormState::Hidden;
                                         self.add_host_form = None;
                                         self.is_edit_mode = false;
@@ -616,16 +617,14 @@ impl App {
                                         return Ok(AppKeyAction::Ok);
                                     }
                                     Err(e) => {
-                                        self.feedback_message = Some(format!("Error: {}", e));
-                                        self.is_feedback_error = true;
+                                        self.set_feedback_message(format!("Error: {}", e), true);
                                         return Ok(AppKeyAction::Ok);
                                     }
                                 }
                             },
                             Err(e) => {
                                 // Error checking for duplicates
-                                self.feedback_message = Some(format!("Error checking for duplicates: {}", e));
-                                self.is_feedback_error = true;
+                                self.set_feedback_message(format!("Error checking for duplicates: {}", e), true);
                                 return Ok(AppKeyAction::Ok);
                             }
                         }
@@ -633,11 +632,9 @@ impl App {
                     
                     // Show specific validation error message
                     if let Some(error_message) = form.validation_error() {
-                        self.feedback_message = Some(error_message);
-                        self.is_feedback_error = true;
+                        self.set_feedback_message(error_message, true);
                     } else {
-                        self.feedback_message = Some("Invalid form data".to_string());
-                        self.is_feedback_error = true;
+                        self.set_feedback_message("Invalid form data".to_string(), true);
                     }
                     
                     return Ok(AppKeyAction::Ok);
@@ -776,6 +773,7 @@ impl App {
         self.add_host_form = Some(AddHostForm::new());
         self.form_state = FormState::Active;
         self.feedback_message = None;
+        self.feedback_timeout = None;
         self.is_edit_mode = false;
         self.editing_host_index = None;
     }
@@ -783,8 +781,7 @@ impl App {
     fn open_edit_host_form(&mut self) {
         let selected = self.table_state.selected().unwrap_or(0);
         if selected >= self.hosts.len() {
-            self.feedback_message = Some("No host selected for editing".to_string());
-            self.is_feedback_error = true;
+            self.set_feedback_message("No host selected for editing".to_string(), true);
             return;
         }
 
@@ -797,6 +794,7 @@ impl App {
         self.add_host_form = Some(form);
         self.form_state = FormState::Active;
         self.feedback_message = None;
+        self.feedback_timeout = None;
         self.is_edit_mode = true;
         self.editing_host_index = Some(selected);
     }
@@ -827,8 +825,7 @@ impl App {
     fn open_delete_host_confirmation(&mut self) {
         let selected = self.table_state.selected().unwrap_or(0);
         if selected >= self.hosts.len() {
-            self.feedback_message = Some("No host selected for deletion".to_string());
-            self.is_feedback_error = true;
+            self.set_feedback_message("No host selected for deletion".to_string(), true);
             return;
         }
 
@@ -862,8 +859,7 @@ impl App {
             }
             
             // Show success message
-            self.feedback_message = Some(format!("Host '{}' deleted successfully", host.name));
-            self.is_feedback_error = false;
+            self.set_feedback_message(format!("Host '{}' deleted successfully", host.name), false);
             
             Ok(())
         } else {
@@ -934,6 +930,22 @@ impl App {
         }
         
         Ok(result.join("\n"))
+    }
+    
+    fn set_feedback_message(&mut self, message: String, is_error: bool) {
+        self.feedback_message = Some(message);
+        self.is_feedback_error = is_error;
+        self.feedback_timeout = Some(Instant::now());
+    }
+    
+    fn check_feedback_timeout(&mut self) {
+        if let Some(timeout) = self.feedback_timeout {
+            // Clear feedback message after 3 seconds
+            if timeout.elapsed() > Duration::from_secs(3) {
+                self.feedback_message = None;
+                self.feedback_timeout = None;
+            }
+        }
     }
     
     fn reload_hosts(&mut self) -> Result<()> {
@@ -1270,6 +1282,7 @@ mod tests {
             form_state: FormState::Hidden,
             feedback_message: None,
             is_feedback_error: false,
+            feedback_timeout: None,
             is_edit_mode: false,
             editing_host_index: None,
             confirm_message: None,
@@ -1588,6 +1601,27 @@ mod tests {
         let confirm_msg = app.confirm_message.as_ref().unwrap();
         assert!(confirm_msg.contains("test-host-1"));
         assert!(confirm_msg.contains("cannot be undone"));
+    }
+
+    #[test]
+    fn test_feedback_message_timeout() {
+        let mut app = create_test_app();
+        
+        // Test setting a feedback message
+        app.set_feedback_message("Test message".to_string(), false);
+        assert_eq!(app.feedback_message, Some("Test message".to_string()));
+        assert!(!app.is_feedback_error);
+        assert!(app.feedback_timeout.is_some());
+        
+        // Test that message persists before timeout
+        app.check_feedback_timeout();
+        assert!(app.feedback_message.is_some());
+        
+        // Simulate timeout by setting feedback_timeout to an old time
+        app.feedback_timeout = Some(Instant::now() - Duration::from_secs(5));
+        app.check_feedback_timeout();
+        assert!(app.feedback_message.is_none());
+        assert!(app.feedback_timeout.is_none());
     }
 
     #[test]
