@@ -90,10 +90,6 @@ pub struct App {
     pub last_key_time: Option<Instant>,
     pub pending_g: bool, // For detecting "gg" sequence
     
-    // SSH password input
-    pub password_input: Option<Input>,
-    pub password_prompt: Option<String>,
-    pub show_password_dialog: bool,
 }
 
 #[derive(PartialEq, Debug)]
@@ -173,10 +169,6 @@ impl App {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
-            
-            password_input: None,
-            password_prompt: None,
-            show_password_dialog: false,
         };
         app.calculate_table_columns_constraints();
 
@@ -999,204 +991,10 @@ impl App {
         }
     }
     
-    fn connect_with_password(&self, host: &ssh::Host, password: &str) -> Result<(), String> {
-        // Clear screen for SSH session
-        print!("\x1b[2J\x1b[H");
-        
-        let user = host.user.as_deref().unwrap_or("root");
-        let port = host.port.as_deref().unwrap_or("22");
-        
-        // First try sshpass if available
-        let sshpass_command = format!(
-            "sshpass -p '{}' ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}", 
-            password.replace("'", "'\"'\"'"), // Escape single quotes
-            port, user, &host.destination
-        );
-        
-        let sshpass_result = Command::new("sh")
-            .arg("-c")
-            .arg(&sshpass_command)
-            .status();
-            
-        match sshpass_result {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!("SSH connection failed with exit code: {}", status.code().unwrap_or(-1))),
-            Err(_) => {
-                // sshpass not available, try expect
-                let expect_command = format!(
-                    r#"expect -c "
-spawn ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}
-expect {{
-    \"*password*\" {{ send \"{}\r\"; exp_continue }}
-    \"*Password*\" {{ send \"{}\r\"; exp_continue }}
-    eof
-}}
-""#,
-                    port, user, &host.destination, 
-                    password.replace("\"", "\\\""), 
-                    password.replace("\"", "\\\"")
-                );
-                
-                let expect_result = Command::new("sh")
-                    .arg("-c")
-                    .arg(&expect_command)
-                    .status();
-                    
-                match expect_result {
-                    Ok(status) if status.success() => Ok(()),
-                    Ok(status) => Err(format!("SSH connection failed with exit code: {}", status.code().unwrap_or(-1))),
-                    Err(_) => {
-                        // Neither sshpass nor expect available, inform user
-                        Err("Password authentication requires 'sshpass' or 'expect' to be installed. Please install one of these tools or use SSH key authentication.".to_string())
-                    }
-                }
-            }
-        }
-    }
-    
-    fn show_password_dialog_and_get_input<B>(
-        &mut self,
-        terminal: &Rc<RefCell<Terminal<B>>>,
-        host: &ssh::Host,
-    ) -> Result<Option<String>, String>
-    where
-        B: Backend + std::io::Write,
-    {
-        // Set up password dialog state
-        self.password_input = Some(Input::default());
-        self.password_prompt = Some(format!("Password for {}@{}", 
-            host.user.as_deref().unwrap_or("root"), 
-            &host.destination));
-        self.show_password_dialog = true;
-
-        // Set up terminal for our UI
-        if let Err(e) = safe_setup_terminal(terminal) {
-            return Err(format!("Failed to setup terminal for password dialog: {}", e));
-        }
-
-        // Password input loop
-        loop {
-            // Render password dialog
-            terminal.borrow_mut().draw(|f| self.render_password_dialog(f))
-                .map_err(|e| format!("Failed to render password dialog: {}", e))?;
-
-            // Handle events
-            let event = crossterm::event::read()
-                .map_err(|e| format!("Failed to read input event: {}", e))?;
-
-            if let crossterm::event::Event::Key(key) = event {
-                if key.kind == crossterm::event::KeyEventKind::Press {
-                    match key.code {
-                        crossterm::event::KeyCode::Enter => {
-                            // Return the password
-                            let password = self.password_input.as_ref()
-                                .map(|input| input.value().to_string())
-                                .unwrap_or_default();
-                            
-                            // Clean up dialog state
-                            self.password_input = None;
-                            self.password_prompt = None;
-                            self.show_password_dialog = false;
-                            
-                            return Ok(Some(password));
-                        }
-                        crossterm::event::KeyCode::Esc => {
-                            // User cancelled
-                            self.password_input = None;
-                            self.password_prompt = None;
-                            self.show_password_dialog = false;
-                            
-                            return Ok(None);
-                        }
-                        _ => {
-                            // Handle password input
-                            if let Some(password_input) = &mut self.password_input {
-                                password_input.handle_event(&event);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    fn render_password_dialog(&self, f: &mut Frame) {
-        let area = f.area();
-        
-        // Create centered box for password dialog
-        let dialog_width = 60;
-        let dialog_height = 8;
-        let x = (area.width.saturating_sub(dialog_width)) / 2;
-        let y = (area.height.saturating_sub(dialog_height)) / 2;
-        
-        let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
-        
-        // Clear background
-        f.render_widget(Clear, dialog_area);
-        
-        // Create styled password dialog
-        let prompt_text = self.password_prompt.as_deref().unwrap_or("Enter password:");
-        
-        let dialog_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::new().fg(self.palette.c500))
-            .border_type(BorderType::Rounded)
-            .title(" SSH Authentication ")
-            .title_style(Style::new().fg(self.palette.c500).add_modifier(Modifier::BOLD));
-        
-        f.render_widget(dialog_block, dialog_area);
-        
-        // Inner area for content
-        let inner_area = dialog_area.inner(Margin::new(2, 1));
-        let chunks = Layout::vertical([
-            Constraint::Length(1), // Prompt
-            Constraint::Length(1), // Spacing
-            Constraint::Length(3), // Password field
-            Constraint::Length(1), // Help text
-        ]).split(inner_area);
-        
-        // Render prompt
-        let prompt_paragraph = Paragraph::new(prompt_text)
-            .style(Style::new().fg(Color::White))
-            .alignment(Alignment::Center);
-        f.render_widget(prompt_paragraph, chunks[0]);
-        
-        // Render password field
-        let password_field_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::new().fg(self.palette.c400))
-            .border_type(BorderType::Rounded)
-            .title("Password");
-        
-        f.render_widget(password_field_block, chunks[2]);
-        
-        // Render masked password content
-        let password_inner = chunks[2].inner(Margin::new(1, 1));
-        if let Some(password_input) = &self.password_input {
-            // Show asterisks instead of actual password
-            let masked_password = "*".repeat(password_input.value().len());
-            let password_text = Paragraph::new(masked_password)
-                .style(Style::new().fg(Color::Yellow));
-            f.render_widget(password_text, password_inner);
-            
-            // Set cursor position
-            let mut cursor_position = password_inner.as_position();
-            cursor_position.x += u16::try_from(password_input.value().len()).unwrap_or_default();
-            f.set_cursor_position(cursor_position);
-        }
-        
-        // Render help text
-        let help_text = "(Enter) confirm | (Esc) cancel";
-        let help_paragraph = Paragraph::new(help_text)
-            .style(Style::new().fg(self.palette.c300))
-            .alignment(Alignment::Center);
-        f.render_widget(help_paragraph, chunks[3]);
-    }
-    
     fn show_session_ended_screen<B>(
         &self,
         terminal: &Rc<RefCell<Terminal<B>>>,
-        host: &ssh::Host,
+        _host: &ssh::Host,
         ssh_result: Result<(), String>,
     ) -> Result<()>
     where
@@ -1338,9 +1136,6 @@ mod tests {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
-            password_input: None,
-            password_prompt: None,
-            show_password_dialog: false,
         }
     }
 
