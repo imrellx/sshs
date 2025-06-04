@@ -14,8 +14,8 @@ use ratatui::{prelude::*, widgets::*};
 use std::{
     cell::RefCell,
     cmp::{max, min},
-    io::{self, BufRead, BufReader, Write},
-    process::{Command, Stdio},
+    io,
+    process::Command,
     rc::Rc,
     thread,
     time::{Duration, Instant},
@@ -974,72 +974,104 @@ impl App {
     where
         B: Backend + std::io::Write,
     {
-        // Clear screen completely before SSH
-        print!("\x1b[2J\x1b[H");
-        
-        // Build SSH command with clean flags
+        // First try with existing SSH agent/keys (non-interactive)
         let user = host.user.as_deref().unwrap_or("root");
         let port = host.port.as_deref().unwrap_or("22");
         
-        // Use interactive SSH with password prompting
-        let mut ssh_process = Command::new("ssh")
-            .arg("-o")
-            .arg("LogLevel=ERROR")
-            .arg("-o")
-            .arg("StrictHostKeyChecking=accept-new")
-            .arg("-o")
-            .arg("PasswordAuthentication=yes")
-            .arg("-o")
-            .arg("PubkeyAuthentication=yes")
-            .arg("-p")
-            .arg(port)
-            .arg(format!("{}@{}", user, &host.destination))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to start SSH process: {}", e))?;
-
-        // Handle potential password prompt
-        if let Some(stderr) = ssh_process.stderr.take() {
-            let mut reader = BufReader::new(stderr);
-            let mut line = String::new();
+        // Try connecting with keys first
+        let ssh_command = format!(
+            "ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -o PasswordAuthentication=no -o BatchMode=yes -p {} {}@{} exit", 
+            port, user, &host.destination
+        );
+        
+        let key_auth_result = Command::new("sh")
+            .arg("-c")
+            .arg(&ssh_command)
+            .output();
             
-            // Check for password prompt
-            match reader.read_line(&mut line) {
-                Ok(0) => {
-                    // No stderr output, likely key-based auth or immediate connection
+        match key_auth_result {
+            Ok(output) if output.status.success() => {
+                // Key authentication worked, proceed with interactive SSH
+                print!("\x1b[2J\x1b[H");
+                let interactive_ssh = format!(
+                    "ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}", 
+                    port, user, &host.destination
+                );
+                
+                let result = Command::new("sh")
+                    .arg("-c")
+                    .arg(&interactive_ssh)
+                    .status();
+                    
+                match result {
+                    Ok(status) if status.success() => Ok(()),
+                    Ok(status) => Err(format!("SSH session ended with exit code: {}", status.code().unwrap_or(-1))),
+                    Err(e) => Err(format!("Failed to execute SSH command: {}", e))
                 }
-                Ok(_) => {
-                    if line.to_lowercase().contains("password") {
-                        // Show password dialog and get password from user
-                        if let Some(password) = self.show_password_dialog_and_get_input(terminal, host)? {
-                            // Send password to SSH process
-                            if let Some(mut stdin) = ssh_process.stdin.take() {
-                                writeln!(stdin, "{}", password)
-                                    .map_err(|e| format!("Failed to send password: {}", e))?;
-                            }
-                        } else {
-                            // User cancelled password input
-                            let _ = ssh_process.kill();
-                            return Err("Password input cancelled".to_string());
-                        }
-                    }
-                }
-                Err(_) => {
-                    // Error reading stderr
+            }
+            _ => {
+                // Key authentication failed, try password authentication
+                if let Some(password) = self.show_password_dialog_and_get_input(terminal, host)? {
+                    self.connect_with_password(host, &password)
+                } else {
+                    Err("Password authentication cancelled".to_string())
                 }
             }
         }
-
-        // Wait for SSH process to complete
-        let result = ssh_process.wait()
-            .map_err(|e| format!("Failed to wait for SSH process: {}", e))?;
+    }
+    
+    fn connect_with_password(&self, host: &ssh::Host, password: &str) -> Result<(), String> {
+        // Clear screen for SSH session
+        print!("\x1b[2J\x1b[H");
+        
+        let user = host.user.as_deref().unwrap_or("root");
+        let port = host.port.as_deref().unwrap_or("22");
+        
+        // First try sshpass if available
+        let sshpass_command = format!(
+            "sshpass -p '{}' ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}", 
+            password.replace("'", "'\"'\"'"), // Escape single quotes
+            port, user, &host.destination
+        );
+        
+        let sshpass_result = Command::new("sh")
+            .arg("-c")
+            .arg(&sshpass_command)
+            .status();
             
-        if result.success() {
-            Ok(())
-        } else {
-            Err(format!("SSH connection failed with exit code: {}", result.code().unwrap_or(-1)))
+        match sshpass_result {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!("SSH connection failed with exit code: {}", status.code().unwrap_or(-1))),
+            Err(_) => {
+                // sshpass not available, try expect
+                let expect_command = format!(
+                    r#"expect -c "
+spawn ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}
+expect {{
+    \"*password*\" {{ send \"{}\r\"; exp_continue }}
+    \"*Password*\" {{ send \"{}\r\"; exp_continue }}
+    eof
+}}
+""#,
+                    port, user, &host.destination, 
+                    password.replace("\"", "\\\""), 
+                    password.replace("\"", "\\\"")
+                );
+                
+                let expect_result = Command::new("sh")
+                    .arg("-c")
+                    .arg(&expect_command)
+                    .status();
+                    
+                match expect_result {
+                    Ok(status) if status.success() => Ok(()),
+                    Ok(status) => Err(format!("SSH connection failed with exit code: {}", status.code().unwrap_or(-1))),
+                    Err(_) => {
+                        // Neither sshpass nor expect available, inform user
+                        Err("Password authentication requires 'sshpass' or 'expect' to be installed. Please install one of these tools or use SSH key authentication.".to_string())
+                    }
+                }
+            }
         }
     }
     
