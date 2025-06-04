@@ -562,6 +562,9 @@ mod tests {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
+            password_input: None,
+            password_prompt: None,
+            show_password_dialog: false,
         }
     }
 
