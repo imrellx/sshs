@@ -15,7 +15,9 @@ use std::{
     cell::RefCell,
     cmp::{max, min},
     io,
+    process::Command,
     rc::Rc,
+    thread,
     time::{Duration, Instant},
 };
 use style::palette::tailwind;
@@ -854,20 +856,30 @@ impl App {
 
         let host: &ssh::Host = &self.hosts[selected];
 
+        // Show styled connection box
+        self.show_connection_screen(terminal, host)?;
+
+        // Restore terminal for SSH session
         if let Err(e) = safe_restore_terminal(terminal) {
             // Even if restore fails, we should try to continue
             eprintln!("Warning: Failed to restore terminal: {}", e);
         }
 
+        // Execute pre-session commands
         if let Some(template) = &self.config.command_template_on_session_start {
             host.run_command_template(template)?;
         }
 
-        host.run_command_template(&self.config.command_template)?;
+        // Connect to SSH with clean output
+        let ssh_result = self.connect_to_ssh_host(host);
 
+        // Execute post-session commands
         if let Some(template) = &self.config.command_template_on_session_end {
             host.run_command_template(template)?;
         }
+
+        // Show return message and restore TUI
+        self.show_session_ended_screen(terminal, host, ssh_result)?;
 
         if let Err(e) = safe_setup_terminal(terminal) {
             // If we can't restore the terminal, we should exit
@@ -880,6 +892,207 @@ impl App {
         }
 
         Ok(AppKeyAction::Ok)
+    }
+    
+    fn show_connection_screen<B>(
+        &self,
+        terminal: &Rc<RefCell<Terminal<B>>>,
+        host: &ssh::Host,
+    ) -> Result<()>
+    where
+        B: Backend + std::io::Write,
+    {
+        // Render connection box
+        terminal.borrow_mut().draw(|f| {
+            let area = f.area();
+            
+            // Create centered box
+            let box_width = 50;
+            let box_height = 8;
+            let x = (area.width.saturating_sub(box_width)) / 2;
+            let y = (area.height.saturating_sub(box_height)) / 2;
+            
+            let box_area = Rect::new(x, y, box_width, box_height);
+            
+            // Clear background
+            f.render_widget(Clear, box_area);
+            
+            // Create styled connection box
+            let connection_text = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("🔗 ", Style::new().fg(self.palette.c500)),
+                    Span::styled("Connecting to ", Style::new().fg(Color::White)),
+                    Span::styled(&host.name, Style::new().fg(self.palette.c400).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("   Host: ", Style::new().fg(self.palette.c300)),
+                    Span::styled(&host.destination, Style::new().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   User: ", Style::new().fg(self.palette.c300)),
+                    Span::styled(host.user.as_deref().unwrap_or("default"), Style::new().fg(Color::White)),
+                ]),
+                Line::from(""),
+            ];
+            
+            let connection_paragraph = Paragraph::new(connection_text)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::new().fg(self.palette.c400))
+                        .border_type(BorderType::Rounded)
+                        .title(" SSH Connection ")
+                        .title_style(Style::new().fg(self.palette.c500).add_modifier(Modifier::BOLD))
+                )
+                .alignment(Alignment::Center);
+            
+            f.render_widget(connection_paragraph, box_area);
+        })?;
+        
+        // Brief pause for user to read
+        thread::sleep(Duration::from_millis(800));
+        
+        Ok(())
+    }
+    
+    fn connect_to_ssh_host(&self, host: &ssh::Host) -> Result<(), String> {
+        // Clear screen completely before SSH
+        print!("\x1b[2J\x1b[H");
+        
+        // Build SSH command with clean flags (errors only)
+        let user = host.user.as_deref().unwrap_or("root");
+        let port = host.port.as_deref().unwrap_or("22");
+        
+        let ssh_command = format!(
+            "ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}", 
+            port, user, &host.destination
+        );
+        
+        // Execute SSH command
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&ssh_command)
+            .status();
+            
+        match output {
+            Ok(status) => {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("SSH connection failed with exit code: {}", status.code().unwrap_or(-1)))
+                }
+            }
+            Err(e) => Err(format!("Failed to execute SSH command: {}", e))
+        }
+    }
+    
+    fn show_session_ended_screen<B>(
+        &self,
+        terminal: &Rc<RefCell<Terminal<B>>>,
+        host: &ssh::Host,
+        ssh_result: Result<(), String>,
+    ) -> Result<()>
+    where
+        B: Backend + std::io::Write,
+    {
+        // Set up terminal for our UI
+        if let Err(e) = safe_setup_terminal(terminal) {
+            eprintln!("Warning: Failed to setup terminal for end screen: {}", e);
+            thread::sleep(Duration::from_millis(1000));
+            return Ok(());
+        }
+        
+        // Render session ended or error box
+        terminal.borrow_mut().draw(|f| {
+            let area = f.area();
+            
+            // Create centered box
+            let box_width = 50;
+            let box_height = match ssh_result {
+                Ok(_) => 6,
+                Err(_) => 10,
+            };
+            let x = (area.width.saturating_sub(box_width)) / 2;
+            let y = (area.height.saturating_sub(box_height)) / 2;
+            
+            let box_area = Rect::new(x, y, box_width, box_height);
+            
+            // Clear background
+            f.render_widget(Clear, box_area);
+            
+            match ssh_result {
+                Ok(_) => {
+                    // Success - session ended normally
+                    let end_text = vec![
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("↩️  ", Style::new().fg(Color::Green)),
+                            Span::styled("SSH session ended", Style::new().fg(Color::White)),
+                        ]),
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("   Returning to SSHS...", Style::new().fg(self.palette.c300)),
+                        ]),
+                    ];
+                    
+                    let end_paragraph = Paragraph::new(end_text)
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::new().fg(Color::Green))
+                                .border_type(BorderType::Rounded)
+                                .title(" Session Complete ")
+                                .title_style(Style::new().fg(Color::Green).add_modifier(Modifier::BOLD))
+                        )
+                        .alignment(Alignment::Center);
+                    
+                    f.render_widget(end_paragraph, box_area);
+                }
+                Err(error_msg) => {
+                    // Error occurred
+                    let error_text = vec![
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("❌ ", Style::new().fg(Color::Red)),
+                            Span::styled("SSH Connection Failed", Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        ]),
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("   Error: ", Style::new().fg(Color::Red)),
+                            Span::styled(&error_msg, Style::new().fg(Color::White)),
+                        ]),
+                        Line::from(""),
+                        Line::from(vec![
+                            Span::styled("   • Check host connectivity", Style::new().fg(self.palette.c300)),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("   • Verify SSH service status", Style::new().fg(self.palette.c300)),
+                        ]),
+                        Line::from(""),
+                    ];
+                    
+                    let error_paragraph = Paragraph::new(error_text)
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::new().fg(Color::Red))
+                                .border_type(BorderType::Rounded)
+                                .title(" Connection Error ")
+                                .title_style(Style::new().fg(Color::Red).add_modifier(Modifier::BOLD))
+                        )
+                        .alignment(Alignment::Center);
+                    
+                    f.render_widget(error_paragraph, box_area);
+                }
+            }
+        })?;
+        
+        // Brief pause for user to read
+        thread::sleep(Duration::from_millis(1500));
+        
+        Ok(())
     }
 }
 
