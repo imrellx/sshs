@@ -42,7 +42,7 @@ pub struct TabManager {
     palette: tailwind::Palette,
     
     /// Last update time for activity monitoring
-    last_update: Instant,
+    _last_update: Instant,
     
     /// Map of session IDs to their tab indices for quick lookup
     session_id_map: HashMap<String, usize>,
@@ -61,7 +61,7 @@ impl TabManager {
                 has_right_overflow: false,
             },
             palette,
-            last_update: Instant::now(),
+            _last_update: Instant::now(),
             session_id_map: HashMap::new(),
         }
     }
@@ -410,8 +410,8 @@ impl TabManager {
     /// Clean up disconnected sessions (optional background task)
     pub fn cleanup_disconnected_sessions(&mut self) {
         // Remove sessions that have been disconnected for too long
-        let cleanup_threshold = Duration::from_secs(300); // 5 minutes
-        let now = Instant::now();
+        let _cleanup_threshold = Duration::from_secs(300); // 5 minutes
+        let _now = Instant::now();
         
         let mut indices_to_remove = Vec::new();
         
@@ -470,8 +470,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_tab_manager_creation() {
+    #[test]
+    fn test_tab_manager_creation() {
         let config = SessionConfig::default();
         let palette = tailwind::BLUE;
         let manager = TabManager::new(config, palette);
@@ -481,22 +481,22 @@ mod tests {
         assert_eq!(manager.get_active_tab_index(), 0);
     }
 
-    #[tokio::test]
-    async fn test_create_session() {
+    #[test]
+    fn test_create_session() {
         let config = SessionConfig::default();
         let palette = tailwind::BLUE;
         let mut manager = TabManager::new(config, palette);
         
         let host = create_test_host("test1");
-        let result = manager.create_session(host).await;
+        let result = manager.create_session(host);
         
         assert!(result.is_ok());
         assert_eq!(manager.session_count(), 1);
         assert_eq!(manager.get_active_tab_index(), 0);
     }
 
-    #[tokio::test]
-    async fn test_tab_navigation() {
+    #[test]
+    fn test_tab_navigation() {
         let config = SessionConfig::default();
         let palette = tailwind::BLUE;
         let mut manager = TabManager::new(config, palette);
@@ -504,7 +504,7 @@ mod tests {
         // Create multiple sessions
         for i in 1..=3 {
             let host = create_test_host(&format!("test{}", i));
-            manager.create_session(host).await.unwrap();
+            manager.create_session(host).unwrap();
         }
         
         assert_eq!(manager.session_count(), 3);
@@ -522,8 +522,8 @@ mod tests {
         assert_eq!(manager.get_active_tab_index(), 1); // 1-based to 0-based
     }
 
-    #[tokio::test]
-    async fn test_close_tab() {
+    #[test]
+    fn test_close_tab() {
         let config = SessionConfig::default();
         let palette = tailwind::BLUE;
         let mut manager = TabManager::new(config, palette);
@@ -531,7 +531,7 @@ mod tests {
         // Create sessions
         for i in 1..=3 {
             let host = create_test_host(&format!("test{}", i));
-            manager.create_session(host).await.unwrap();
+            manager.create_session(host).unwrap();
         }
         
         assert_eq!(manager.session_count(), 3);
@@ -550,8 +550,8 @@ mod tests {
         assert!(manager.is_empty());
     }
 
-    #[tokio::test]
-    async fn test_overflow_handling() {
+    #[test]
+    fn test_overflow_handling() {
         let config = SessionConfig::default();
         let palette = tailwind::BLUE;
         let mut manager = TabManager::new(config, palette);
@@ -559,7 +559,7 @@ mod tests {
         // Create more tabs than MAX_VISIBLE_TABS
         for i in 1..=15 {
             let host = create_test_host(&format!("test{}", i));
-            manager.create_session(host).await.unwrap();
+            manager.create_session(host).unwrap();
         }
         
         let (start, end) = manager.get_visible_tab_range();

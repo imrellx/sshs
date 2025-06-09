@@ -15,9 +15,7 @@ use std::{
     cell::RefCell,
     cmp::{max, min},
     io,
-    process::Command,
     rc::Rc,
-    thread,
     time::{Duration, Instant},
 };
 use style::palette::tailwind;
@@ -207,7 +205,7 @@ impl App {
         // This way we don't need to share the terminal between threads
         crossterm::event::read()
             .ok() // Prepare the event system, ignore initial read result
-            .and_then(|_| None::<crossterm::event::Event>); // Return None to continue
+            .and(None::<crossterm::event::Event>); // Return None to continue
 
         // Set up terminal
         safe_setup_terminal(&terminal)?;
@@ -1096,8 +1094,8 @@ impl App {
             let line = lines[i].trim();
             
             // Look for Host lines that match our target host name
-            if line.starts_with("Host ") {
-                let pattern = line["Host ".len()..].trim();
+            if let Some(stripped) = line.strip_prefix("Host ") {
+                let pattern = stripped.trim();
                 let clean_pattern = pattern.trim_matches('"');
                 
                 if clean_pattern == host_to_delete.name {
@@ -1221,260 +1219,80 @@ impl App {
         
         Ok(())
     }
+}
+
+// Better error handling for terminal setup/teardown
+pub fn safe_setup_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
+where
+    B: Backend + std::io::Write,
+{
+    // First, try to restore the terminal in case it was left in a bad state
+    // We ignore errors here since we're just making sure we're starting fresh
+    let _ = disable_raw_mode();
+    let _ = {
+        let mut terminal_ref = terminal.borrow_mut();
+        execute!(terminal_ref.backend_mut(), Show, LeaveAlternateScreen, DisableMouseCapture)
+    };
+
+    // Now set up the terminal properly
+    enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {}", e))?;
     
-    fn connect_to_selected_host<B>(
-        &mut self,
-        terminal: &Rc<RefCell<Terminal<B>>>,
-    ) -> Result<AppKeyAction>
-    where
-        B: Backend + std::io::Write,
-    {
-        let selected = self.table_state.selected().unwrap_or(0);
-        if selected >= self.hosts.len() {
-            return Ok(AppKeyAction::Ok);
-        }
+    // Set up terminal features one by one to better identify issues
+    let mut terminal_ref = terminal.borrow_mut();
+    
+    execute!(terminal_ref.backend_mut(), Hide)
+        .map_err(|e| anyhow::anyhow!("Failed to hide cursor: {}", e))?;
+    
+    execute!(terminal_ref.backend_mut(), EnterAlternateScreen)
+        .map_err(|e| anyhow::anyhow!("Failed to enter alternate screen: {}", e))?;
+    
+    execute!(terminal_ref.backend_mut(), EnableMouseCapture)
+        .map_err(|e| anyhow::anyhow!("Failed to enable mouse capture: {}", e))?;
+    
+    Ok(())
+}
 
-        let host = self.hosts[selected].clone();
-
-        // Show styled connection box
-        self.show_connection_screen(terminal, &host)?;
-
-        // Restore terminal for SSH session
-        if let Err(e) = safe_restore_terminal(terminal) {
-            // Even if restore fails, we should try to continue
-            eprintln!("Warning: Failed to restore terminal: {}", e);
-        }
-
-        // Execute pre-session commands
-        if let Some(template) = &self.config.command_template_on_session_start {
-            host.run_command_template(template)?;
-        }
-
-        // Connect to SSH with clean output
-        let ssh_result = self.connect_to_ssh_host(terminal, &host);
-
-        // Execute post-session commands
-        if let Some(template) = &self.config.command_template_on_session_end {
-            host.run_command_template(template)?;
-        }
-
-        // Show return message and restore TUI
-        self.show_session_ended_screen(terminal, &host, ssh_result)?;
-
-        if let Err(e) = safe_setup_terminal(terminal) {
-            // If we can't restore the terminal, we should exit
-            eprintln!("Fatal error: Failed to setup terminal: {}", e);
-            return Err(e);
-        }
-
-        if self.config.exit_after_ssh_session_ends {
-            return Ok(AppKeyAction::Stop);
-        }
-
-        Ok(AppKeyAction::Ok)
+pub fn safe_restore_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
+where
+    B: Backend + std::io::Write,
+{
+    // Gather errors rather than failing on the first one
+    let mut errors = Vec::new();
+    
+    // Try to clear terminal
+    if let Err(e) = terminal.borrow_mut().clear() {
+        errors.push(format!("Failed to clear terminal: {}", e));
     }
     
-    fn show_connection_screen<B>(
-        &self,
-        terminal: &Rc<RefCell<Terminal<B>>>,
-        host: &ssh::Host,
-    ) -> Result<()>
-    where
-        B: Backend + std::io::Write,
+    // Try to disable raw mode - very important to restore
+    if let Err(e) = disable_raw_mode() {
+        errors.push(format!("Failed to disable raw mode: {}", e));
+    }
+    
+    // Try to restore terminal state
     {
-        // Render connection box
-        terminal.borrow_mut().draw(|f| {
-            let area = f.area();
-            
-            // Create centered box
-            let box_width = 50;
-            let box_height = 8;
-            let x = (area.width.saturating_sub(box_width)) / 2;
-            let y = (area.height.saturating_sub(box_height)) / 2;
-            
-            let box_area = Rect::new(x, y, box_width, box_height);
-            
-            // Clear background
-            f.render_widget(Clear, box_area);
-            
-            // Create styled connection box
-            let connection_text = vec![
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("🔗 ", Style::new().fg(self.palette.c500)),
-                    Span::styled("Connecting to ", Style::new().fg(Color::White)),
-                    Span::styled(&host.name, Style::new().fg(self.palette.c400).add_modifier(Modifier::BOLD)),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("   Host: ", Style::new().fg(self.palette.c300)),
-                    Span::styled(&host.destination, Style::new().fg(Color::White)),
-                ]),
-                Line::from(vec![
-                    Span::styled("   User: ", Style::new().fg(self.palette.c300)),
-                    Span::styled(host.user.as_deref().unwrap_or("default"), Style::new().fg(Color::White)),
-                ]),
-                Line::from(""),
-            ];
-            
-            let connection_paragraph = Paragraph::new(connection_text)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::new().fg(self.palette.c400))
-                        .border_type(BorderType::Rounded)
-                        .title(" SSH Connection ")
-                        .title_style(Style::new().fg(self.palette.c500).add_modifier(Modifier::BOLD))
-                )
-                .alignment(Alignment::Center);
-            
-            f.render_widget(connection_paragraph, box_area);
-        })?;
+        let mut terminal_ref = terminal.borrow_mut();
         
-        // Brief pause for user to read
-        thread::sleep(Duration::from_millis(800));
+        // Show cursor
+        if let Err(e) = execute!(terminal_ref.backend_mut(), Show) {
+            errors.push(format!("Failed to show cursor: {}", e));
+        }
         
+        // Leave alternate screen
+        if let Err(e) = execute!(terminal_ref.backend_mut(), LeaveAlternateScreen) {
+            errors.push(format!("Failed to leave alternate screen: {}", e));
+        }
+        
+        // Disable mouse capture
+        if let Err(e) = execute!(terminal_ref.backend_mut(), DisableMouseCapture) {
+            errors.push(format!("Failed to disable mouse capture: {}", e));
+        }
+    }
+    
+    if errors.is_empty() {
         Ok(())
-    }
-    
-    fn connect_to_ssh_host<B>(
-        &mut self,
-        _terminal: &Rc<RefCell<Terminal<B>>>,
-        host: &ssh::Host,
-    ) -> Result<(), String>
-    where
-        B: Backend + std::io::Write,
-    {
-        // Clear screen completely before SSH
-        print!("\x1b[2J\x1b[H");
-        
-        // Build SSH command with normal authentication flow
-        let user = host.user.as_deref().unwrap_or("root");
-        let port = host.port.as_deref().unwrap_or("22");
-        
-        let ssh_command = format!(
-            "ssh -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -p {} {}@{}", 
-            port, user, &host.destination
-        );
-        
-        // Execute SSH command normally - let SSH handle authentication
-        let result = Command::new("sh")
-            .arg("-c")
-            .arg(&ssh_command)
-            .status();
-            
-        match result {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!("SSH connection failed with exit code: {}", status.code().unwrap_or(-1))),
-            Err(e) => Err(format!("Failed to execute SSH command: {}", e))
-        }
-    }
-    
-    fn show_session_ended_screen<B>(
-        &self,
-        terminal: &Rc<RefCell<Terminal<B>>>,
-        _host: &ssh::Host,
-        ssh_result: Result<(), String>,
-    ) -> Result<()>
-    where
-        B: Backend + std::io::Write,
-    {
-        // Set up terminal for our UI
-        if let Err(e) = safe_setup_terminal(terminal) {
-            eprintln!("Warning: Failed to setup terminal for end screen: {}", e);
-            thread::sleep(Duration::from_millis(1000));
-            return Ok(());
-        }
-        
-        // Render session ended or error box
-        terminal.borrow_mut().draw(|f| {
-            let area = f.area();
-            
-            // Create centered box
-            let box_width = 50;
-            let box_height = match ssh_result {
-                Ok(_) => 6,
-                Err(_) => 10,
-            };
-            let x = (area.width.saturating_sub(box_width)) / 2;
-            let y = (area.height.saturating_sub(box_height)) / 2;
-            
-            let box_area = Rect::new(x, y, box_width, box_height);
-            
-            // Clear background
-            f.render_widget(Clear, box_area);
-            
-            match ssh_result {
-                Ok(_) => {
-                    // Success - session ended normally
-                    let end_text = vec![
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("↩️  ", Style::new().fg(Color::Green)),
-                            Span::styled("SSH session ended", Style::new().fg(Color::White)),
-                        ]),
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("   Returning to SSHS...", Style::new().fg(self.palette.c300)),
-                        ]),
-                    ];
-                    
-                    let end_paragraph = Paragraph::new(end_text)
-                        .block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .border_style(Style::new().fg(Color::Green))
-                                .border_type(BorderType::Rounded)
-                                .title(" Session Complete ")
-                                .title_style(Style::new().fg(Color::Green).add_modifier(Modifier::BOLD))
-                        )
-                        .alignment(Alignment::Center);
-                    
-                    f.render_widget(end_paragraph, box_area);
-                }
-                Err(error_msg) => {
-                    // Error occurred
-                    let error_text = vec![
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("❌ ", Style::new().fg(Color::Red)),
-                            Span::styled("SSH Connection Failed", Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        ]),
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("   Error: ", Style::new().fg(Color::Red)),
-                            Span::styled(&error_msg, Style::new().fg(Color::White)),
-                        ]),
-                        Line::from(""),
-                        Line::from(vec![
-                            Span::styled("   • Check host connectivity", Style::new().fg(self.palette.c300)),
-                        ]),
-                        Line::from(vec![
-                            Span::styled("   • Verify SSH service status", Style::new().fg(self.palette.c300)),
-                        ]),
-                        Line::from(""),
-                    ];
-                    
-                    let error_paragraph = Paragraph::new(error_text)
-                        .block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .border_style(Style::new().fg(Color::Red))
-                                .border_type(BorderType::Rounded)
-                                .title(" Connection Error ")
-                                .title_style(Style::new().fg(Color::Red).add_modifier(Modifier::BOLD))
-                        )
-                        .alignment(Alignment::Center);
-                    
-                    f.render_widget(error_paragraph, box_area);
-                }
-            }
-        })?;
-        
-        // Brief pause for user to read
-        thread::sleep(Duration::from_millis(1500));
-        
-        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Terminal restoration errors: {}", errors.join("; ")))
     }
 }
 
@@ -1497,6 +1315,9 @@ mod tests {
             exit_after_ssh_session_ends: false,
         };
 
+        let session_config = SessionConfig::default();
+        let tab_manager = crate::ui::tabs::TabManager::new(session_config, tailwind::BLUE);
+
         App {
             config,
             search: Input::default(),
@@ -1504,6 +1325,7 @@ mod tests {
             hosts: Searchable::new(Vec::new(), "", |_, _| true),
             table_columns_constraints: vec![],
             palette: tailwind::BLUE,
+            tab_manager,
             add_host_form: None,
             form_state: FormState::Hidden,
             feedback_message: None,
@@ -1516,6 +1338,8 @@ mod tests {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
+            pending_gt: false,
+            pending_number: None,
         }
     }
 
@@ -1897,80 +1721,5 @@ mod tests {
         assert!(app.add_host_form.is_some());
         assert!(app.is_edit_mode);
         assert_eq!(app.editing_host_index, Some(0));
-    }
-}
-
-// Better error handling for terminal setup/teardown
-pub fn safe_setup_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
-where
-    B: Backend + std::io::Write,
-{
-    // First, try to restore the terminal in case it was left in a bad state
-    // We ignore errors here since we're just making sure we're starting fresh
-    let _ = disable_raw_mode();
-    let _ = {
-        let mut terminal_ref = terminal.borrow_mut();
-        execute!(terminal_ref.backend_mut(), Show, LeaveAlternateScreen, DisableMouseCapture)
-    };
-
-    // Now set up the terminal properly
-    enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {}", e))?;
-    
-    // Set up terminal features one by one to better identify issues
-    let mut terminal_ref = terminal.borrow_mut();
-    
-    execute!(terminal_ref.backend_mut(), Hide)
-        .map_err(|e| anyhow::anyhow!("Failed to hide cursor: {}", e))?;
-    
-    execute!(terminal_ref.backend_mut(), EnterAlternateScreen)
-        .map_err(|e| anyhow::anyhow!("Failed to enter alternate screen: {}", e))?;
-    
-    execute!(terminal_ref.backend_mut(), EnableMouseCapture)
-        .map_err(|e| anyhow::anyhow!("Failed to enable mouse capture: {}", e))?;
-    
-    Ok(())
-}
-
-pub fn safe_restore_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
-where
-    B: Backend + std::io::Write,
-{
-    // Gather errors rather than failing on the first one
-    let mut errors = Vec::new();
-    
-    // Try to clear terminal
-    if let Err(e) = terminal.borrow_mut().clear() {
-        errors.push(format!("Failed to clear terminal: {}", e));
-    }
-    
-    // Try to disable raw mode - very important to restore
-    if let Err(e) = disable_raw_mode() {
-        errors.push(format!("Failed to disable raw mode: {}", e));
-    }
-    
-    // Try to restore terminal state
-    {
-        let mut terminal_ref = terminal.borrow_mut();
-        
-        // Show cursor
-        if let Err(e) = execute!(terminal_ref.backend_mut(), Show) {
-            errors.push(format!("Failed to show cursor: {}", e));
-        }
-        
-        // Leave alternate screen
-        if let Err(e) = execute!(terminal_ref.backend_mut(), LeaveAlternateScreen) {
-            errors.push(format!("Failed to leave alternate screen: {}", e));
-        }
-        
-        // Disable mouse capture
-        if let Err(e) = execute!(terminal_ref.backend_mut(), DisableMouseCapture) {
-            errors.push(format!("Failed to disable mouse capture: {}", e));
-        }
-    }
-    
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Terminal restoration errors: {}", errors.join("; ")))
     }
 }

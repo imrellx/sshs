@@ -244,9 +244,9 @@ impl AddHostForm {
             let trimmed = line.trim();
             
             // Look for lines that start with "Host"
-            if trimmed.starts_with("Host ") {
+            if let Some(stripped) = trimmed.strip_prefix("Host ") {
                 // Extract the host pattern (everything after "Host ")
-                let pattern = trimmed["Host ".len()..].trim();
+                let pattern = stripped.trim();
                 
                 // Remove quotes for comparison if they exist
                 let clean_pattern = pattern.trim_matches('"');
@@ -298,7 +298,7 @@ impl AddHostForm {
         let mut entry = format!("\nHost {}\n", host_name);
         entry.push_str(&format!("  Hostname {}\n", hostname));
         
-        if let Some(username) = (!username.is_empty()).then(|| username) {
+        if let Some(username) = (!username.is_empty()).then_some(username) {
             entry.push_str(&format!("  User {}\n", username));
         }
         
@@ -386,8 +386,8 @@ impl AddHostForm {
             let line = lines[i].trim();
             
             // Look for Host lines that match our original host name
-            if line.starts_with("Host ") {
-                let pattern = line["Host ".len()..].trim();
+            if let Some(stripped) = line.strip_prefix("Host ") {
+                let pattern = stripped.trim();
                 let clean_pattern = pattern.trim_matches('"');
                 
                 if clean_pattern == original_host.name {
@@ -646,7 +646,7 @@ mod tests {
         writeln!(temp_file, "  Hostname old.example.com")?;
         writeln!(temp_file, "  User olduser")?;
         writeln!(temp_file, "  Port 22")?;
-        writeln!(temp_file, "")?;
+        writeln!(temp_file)?;
         writeln!(temp_file, "Host another-host")?;
         writeln!(temp_file, "  Hostname another.example.com")?;
 

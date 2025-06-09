@@ -1,7 +1,6 @@
 use anyhow::Result;
-use portable_pty::{CommandBuilder, PtySize, PtySystem, Child, MasterPty};
+use portable_pty::{CommandBuilder, PtySize, Child, MasterPty};
 use std::collections::VecDeque;
-use std::io::{Read, Write};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use std::thread;
