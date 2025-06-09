@@ -583,37 +583,45 @@ fn render_active_session(f: &mut Frame, app: &mut App, area: Rect) {
             .title(format!(" {} ", session.display_name))
             .title_style(Style::default().fg(app.palette.c500).add_modifier(Modifier::BOLD));
 
-        // For now, show a placeholder for the terminal content
-        let terminal_content = vec![
-            Line::from(""),
-            Line::from(Span::styled("SSH Terminal Session", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Host: ", Style::default().fg(app.palette.c300)),
-                Span::styled(&session.host.destination, Style::default().fg(Color::White)),
-            ]),
-            Line::from(vec![
-                Span::styled("User: ", Style::default().fg(app.palette.c300)),
-                Span::styled(session.host.user.as_deref().unwrap_or("default"), Style::default().fg(Color::White)),
-            ]),
-            Line::from(vec![
-                Span::styled("Status: ", Style::default().fg(app.palette.c300)),
-                Span::styled(
-                    format!("{:?}", session.state),
-                    match session.state {
-                        super::session::ConnectionState::Connected => Style::default().fg(Color::Green),
-                        super::session::ConnectionState::Connecting => Style::default().fg(Color::Yellow),
-                        super::session::ConnectionState::Disconnected => Style::default().fg(Color::Red),
-                        super::session::ConnectionState::Error(_) => Style::default().fg(Color::Red),
-                        super::session::ConnectionState::Reconnecting => Style::default().fg(Color::Yellow),
-                    }
-                ),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Terminal output will appear here...", Style::default().fg(app.palette.c300))),
-            Line::from(""),
-            Line::from(Span::styled("TODO: Implement VT100 terminal rendering", Style::default().fg(Color::Yellow))),
-        ];
+        // Render actual terminal content from VT100 screen
+        let screen = session.terminal.get_screen();
+        let mut terminal_content = Vec::new();
+        
+        // Use the screen contents directly since VT100 API may be different
+        let contents = screen.contents();
+        
+        // Split content into lines and render
+        if !contents.is_empty() {
+            for line in contents.lines() {
+                terminal_content.push(Line::from(line.to_string()));
+            }
+        }
+        
+        // If terminal is empty, show connection status
+        if terminal_content.is_empty() || terminal_content.iter().all(|line| line.spans.is_empty()) {
+            terminal_content = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Host: ", Style::default().fg(app.palette.c300)),
+                    Span::styled(&session.host.destination, Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Status: ", Style::default().fg(app.palette.c300)),
+                    Span::styled(
+                        format!("{:?}", session.state),
+                        match session.state {
+                            super::session::ConnectionState::Connected => Style::default().fg(Color::Green),
+                            super::session::ConnectionState::Connecting => Style::default().fg(Color::Yellow),
+                            super::session::ConnectionState::Disconnected => Style::default().fg(Color::Red),
+                            super::session::ConnectionState::Error(_) => Style::default().fg(Color::Red),
+                            super::session::ConnectionState::Reconnecting => Style::default().fg(Color::Yellow),
+                        }
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled("Waiting for SSH connection...", Style::default().fg(app.palette.c300))),
+            ];
+        }
 
         let terminal_paragraph = Paragraph::new(terminal_content)
             .block(terminal_block)
@@ -995,6 +1003,42 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    fn test_ssh_session_terminal_rendering() {
+        // Create a test backend with a fixed size
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        
+        // Create a test app with an SSH session
+        let mut app = create_test_app();
+        let host = crate::ssh::Host {
+            name: "test-server".to_string(),
+            destination: "test.example.com".to_string(),
+            user: Some("testuser".to_string()),
+            port: Some("22".to_string()),
+            aliases: "".to_string(),
+            proxy_command: None,
+        };
+        
+        // Create SSH session using tab manager
+        let _ = app.tab_manager.create_session(host);
+        app.focus_state = FocusState::Session;
+        
+        // Simulate SSH authentication prompt in the session
+        if let Some(session) = app.tab_manager.get_active_session_mut() {
+            session.terminal.process_data(b"user@hostname's password: ");
+        }
+        
+        // Render the tabbed UI
+        terminal.draw(|f| render_tabbed_ui(f, &mut app)).unwrap();
+        
+        // Get the buffer after rendering
+        let buffer = terminal.backend().buffer().clone();
+        
+        // This test should fail initially because we're not rendering actual terminal content
+        assert!(buffer_contains_text(&buffer, "password"), "SSH authentication prompt should be visible in terminal view");
     }
 
     /// Helper function to check if a buffer contains specific text
