@@ -1394,10 +1394,11 @@ mod tests {
 
     #[test]
     fn test_vim_navigation_keys() {
+        use crate::ssh::Host;
+        
         let mut app = create_test_app();
         
         // Add some test hosts for navigation
-        use crate::ssh::Host;
         let hosts = vec![
             Host {
                 name: "host1".to_string(),
@@ -1443,10 +1444,11 @@ mod tests {
 
     #[test]
     fn test_gg_sequence() {
+        use crate::ssh::Host;
+        
         let mut app = create_test_app();
         
         // Add some test hosts
-        use crate::ssh::Host;
         let hosts = vec![
             Host {
                 name: "host1".to_string(),
@@ -1519,10 +1521,11 @@ mod tests {
 
     #[test]
     fn test_search_mode_escape_transitions() {
+        use crate::ssh::Host;
+        
         let mut app = create_test_app();
         
         // Add some test hosts
-        use crate::ssh::Host;
         let hosts = vec![
             Host {
                 name: "test-host".to_string(),
@@ -1542,7 +1545,6 @@ mod tests {
             },
         ];
         // Create proper search closure that mimics the real search behavior
-        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
         let matcher = SkimMatcherV2::default();
         app.hosts = Searchable::new(hosts, "", move |host: &&crate::ssh::Host, search_value: &str| -> bool {
             search_value.is_empty()
@@ -1570,10 +1572,12 @@ mod tests {
 
     #[test]
     fn test_search_mode_enter_keeps_filter() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+        
         let mut app = create_test_app();
         
         // Add some test hosts
-        use crate::ssh::Host;
         let hosts = vec![
             Host {
                 name: "test-host".to_string(),
@@ -1593,7 +1597,6 @@ mod tests {
             },
         ];
         // Create proper search closure that mimics the real search behavior
-        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
         let matcher = SkimMatcherV2::default();
         app.hosts = Searchable::new(hosts, "", move |host: &&crate::ssh::Host, search_value: &str| -> bool {
             search_value.is_empty()
@@ -1621,10 +1624,12 @@ mod tests {
 
     #[test]
     fn test_delete_host_functionality() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+        
         let mut app = create_test_app();
         
         // Add a test host for deletion
-        use crate::ssh::Host;
         let hosts = vec![
             Host {
                 name: "test-host-1".to_string(),
@@ -1645,7 +1650,6 @@ mod tests {
         ];
         
         // Create proper search closure
-        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
         let matcher = SkimMatcherV2::default();
         app.hosts = Searchable::new(hosts, "", move |host: &&crate::ssh::Host, search_value: &str| -> bool {
             search_value.is_empty()
@@ -1691,6 +1695,9 @@ mod tests {
 
     #[test]
     fn test_single_key_host_management() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+        
         let mut app = create_test_app();
         
         // Ensure we're in Normal mode
@@ -1710,7 +1717,6 @@ mod tests {
         app.is_edit_mode = false;
         
         // Add a test host for editing
-        use crate::ssh::Host;
         let hosts = vec![Host {
             name: "test-host".to_string(),
             destination: "test.com".to_string(),
@@ -1720,7 +1726,6 @@ mod tests {
             proxy_command: None,
         }];
         // Create proper search closure
-        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
         let matcher = SkimMatcherV2::default();
         app.hosts = Searchable::new(hosts, "", move |host: &&crate::ssh::Host, search_value: &str| -> bool {
             search_value.is_empty()
