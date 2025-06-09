@@ -185,11 +185,6 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let terminal = Rc::new(RefCell::new(Terminal::new(backend)?));
 
-        // Set up simple signal handler for Ctrl+C using crossterm only, not ctrlc
-        // This way we don't need to share the terminal between threads
-        crossterm::event::read()
-            .ok() // Prepare the event system, ignore initial read result
-            .and_then(|_| None::<crossterm::event::Event>); // Return None to continue
 
         // Set up terminal
         safe_setup_terminal(&terminal)?;
