@@ -111,11 +111,17 @@ Before making substantial changes, ask clearly:
 
 ---
 
-## Python Specific
-- Use `uv` for package management
-- Type hints for public APIs
-- Follow PEP 8 with project variations
-- Docstrings for public functions
+## Rust Specific
+- Use `cargo` for build and package management
+- Follow Rust conventions and idioms
+- Use `clippy` for linting: `cargo clippy`
+- Use `rustfmt` for formatting: `cargo fmt`
+- Build commands:
+  - Development build: `cargo build`
+  - Release build: `cargo build --release`
+  - Run application: `cargo run`
+  - Run tests: `cargo test`
+  - Check code: `cargo check`
 
 ## Project Structure
 ```
@@ -129,6 +135,9 @@ project/
 ```
 
 ---
+
+## Repository Reference
+- This is the repository you should be committing to. Please use this repository at all times and no other repository: https://github.com/imrellx/sshs
 
 ## Remember
 - Ship working code frequently
