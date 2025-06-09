@@ -230,16 +230,14 @@ impl App {
                         FormState::Hidden => {
                             let action = self.on_key_press(terminal, key)?;
                             match action {
-                                AppKeyAction::Ok => continue,
                                 AppKeyAction::Stop => break,
-                                AppKeyAction::Confirm => continue, // Should not happen in this state
+                                AppKeyAction::Ok | AppKeyAction::Confirm => continue, // Should not happen in this state
                                 AppKeyAction::Continue => {}
                             }
                         }
                         FormState::Active | FormState::Confirming => {
                             let action = self.on_form_key_press(key)?;
                             match action {
-                                AppKeyAction::Ok => continue,
                                 AppKeyAction::Stop => {
                                     self.form_state = FormState::Hidden;
                                     self.add_host_form = None;
@@ -249,7 +247,7 @@ impl App {
                                     self.editing_host_index = None;
                                     continue;
                                 }
-                                AppKeyAction::Confirm => continue,
+                                AppKeyAction::Ok | AppKeyAction::Confirm => continue,
                                 AppKeyAction::Continue => {}
                             }
                         }
@@ -323,7 +321,7 @@ impl App {
         // Handle mode-specific key presses
         match self.focus_state {
             FocusState::Normal => self.handle_normal_mode_keys(terminal, key),
-            FocusState::Search => self.handle_search_mode_keys(key),
+            FocusState::Search => Ok(self.handle_search_mode_keys(key)),
         }
     }
     
@@ -352,14 +350,10 @@ impl App {
             // Quit application with 'q' (Vim-like)
             Char('q') => return Ok(AppKeyAction::Stop),
             
-            // Vim-like navigation
-            Char('j') => self.next(),
-            Char('k') => self.previous(),
-            Char('h') => {}, // Reserved for future horizontal navigation
-            Char('l') => {}, // Reserved for future horizontal navigation
+            Char('h' | 'l') => {}, // Reserved for future horizontal navigation
             
             // Jump to extremes
-            Char('G') => self.table_state.select(Some(self.hosts.len().saturating_sub(1))),
+            Char('G') | End => self.table_state.select(Some(self.hosts.len().saturating_sub(1))),
             Char('g') => {
                 if self.pending_g {
                     // Second 'g' - jump to top
@@ -392,11 +386,10 @@ impl App {
                 self.open_delete_host_confirmation();
             }
             
-            // Traditional navigation (backward compatibility)
-            Down => self.next(),
-            Up => self.previous(),
+            // Navigation keys - vim and traditional combined
+            Char('j') | Down | Tab => self.next(),
+            Char('k') | Up | BackTab => self.previous(),
             Home => self.table_state.select(Some(0)),
-            End => self.table_state.select(Some(self.hosts.len().saturating_sub(1))),
             PageDown => {
                 let i = self.table_state.selected().unwrap_or(0);
                 let target = min(i.saturating_add(PAGE_SIZE), self.hosts.len().saturating_sub(1));
@@ -413,10 +406,6 @@ impl App {
                 return self.connect_to_selected_host(terminal);
             }
             
-            // Tab for alternative navigation
-            Tab => self.next(),
-            BackTab => self.previous(),
-            
             _ => return Ok(AppKeyAction::Continue),
         }
 
@@ -429,7 +418,7 @@ impl App {
         Ok(AppKeyAction::Ok)
     }
     
-    fn handle_search_mode_keys(&mut self, key: KeyEvent) -> Result<AppKeyAction> {
+    fn handle_search_mode_keys(&mut self, key: KeyEvent) -> AppKeyAction {
         #[allow(clippy::enum_glob_use)]
         use KeyCode::*;
 
@@ -454,11 +443,11 @@ impl App {
             }
             _ => {
                 // Let the search field handle the input - this is already done in the main loop
-                return Ok(AppKeyAction::Continue);
+                return AppKeyAction::Continue;
             }
         }
 
-        Ok(AppKeyAction::Ok)
+        AppKeyAction::Ok
     }
 
     fn on_key_press_ctrl(&mut self, key: KeyEvent) -> AppKeyAction {
@@ -486,6 +475,7 @@ impl App {
         }
     }
     
+    #[allow(clippy::too_many_lines)]
     fn on_form_key_press(&mut self, key: KeyEvent) -> Result<AppKeyAction> {
         #[allow(clippy::enum_glob_use)]
         use KeyCode::*;
@@ -841,7 +831,7 @@ impl App {
             let config_path = shellexpand::tilde(&self.config.config_paths[1]).to_string();
             
             // Delete the host from SSH config file
-            self.delete_host_from_config(&config_path, &host)?;
+            Self::delete_host_from_config(&config_path, &host)?;
             
             // Reload hosts to refresh the list
             self.reload_hosts()?;
@@ -862,7 +852,7 @@ impl App {
         }
     }
     
-    fn delete_host_from_config(&self, config_path: &str, host_to_delete: &ssh::Host) -> Result<()> {
+    fn delete_host_from_config(config_path: &str, host_to_delete: &ssh::Host) -> Result<()> {
         use std::fs;
         
         // Read the current config file
@@ -875,7 +865,7 @@ impl App {
             .map_err(|e| anyhow::anyhow!("Failed to create backup of SSH config file: {}", e))?;
         
         // Parse and remove the host entry
-        let updated_content = self.remove_host_entry(&content, host_to_delete)?;
+        let updated_content = Self::remove_host_entry(&content, host_to_delete)?;
         
         // Write the updated content back to the file
         fs::write(config_path, updated_content)
@@ -884,7 +874,7 @@ impl App {
         Ok(())
     }
     
-    fn remove_host_entry(&self, content: &str, host_to_delete: &ssh::Host) -> Result<String> {
+    fn remove_host_entry(content: &str, host_to_delete: &ssh::Host) -> Result<String> {
         let lines: Vec<&str> = content.lines().collect();
         let mut result = Vec::new();
         let mut i = 0;
@@ -894,8 +884,8 @@ impl App {
             let line = lines[i].trim();
             
             // Look for Host lines that match our target host name
-            if line.starts_with("Host ") {
-                let pattern = line["Host ".len()..].trim();
+            if let Some(stripped) = line.strip_prefix("Host ") {
+                let pattern = stripped.trim();
                 let clean_pattern = pattern.trim_matches('"');
                 
                 if clean_pattern == host_to_delete.name {
@@ -1020,7 +1010,7 @@ impl App {
         }
 
         // Connect to SSH with clean output
-        let ssh_result = self.connect_to_ssh_host(terminal, &host);
+        let ssh_result = Self::connect_to_ssh_host(terminal, &host);
 
         // Execute post-session commands
         if let Some(template) = &self.config.command_template_on_session_end {
@@ -1107,7 +1097,6 @@ impl App {
     }
     
     fn connect_to_ssh_host<B>(
-        &mut self,
         _terminal: &Rc<RefCell<Terminal<B>>>,
         host: &ssh::Host,
     ) -> Result<(), String>
@@ -1248,6 +1237,9 @@ impl App {
 }
 
 // Better error handling for terminal setup/teardown
+/// # Errors
+///
+/// Will return `Err` if the terminal cannot be configured properly.
 pub fn safe_setup_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
 where
     B: Backend + std::io::Write,
@@ -1278,6 +1270,9 @@ where
     Ok(())
 }
 
+/// # Errors
+///
+/// Will return `Err` if the terminal cannot be restored properly.
 pub fn safe_restore_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
 where
     B: Backend + std::io::Write,
@@ -1378,8 +1373,8 @@ mod tests {
         
         // Press Esc to return to Normal mode
         let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        let result = app.handle_search_mode_keys(key_event);
-        assert!(result.is_ok());
+        let action = app.handle_search_mode_keys(key_event);
+        assert_eq!(action, AppKeyAction::Ok);
         assert_eq!(app.focus_state, FocusState::Normal);
     }
 
@@ -1566,8 +1561,8 @@ mod tests {
         
         // Press Esc - should return to Normal mode and clear search
         let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        let result = app.handle_search_mode_keys(key_event);
-        assert!(result.is_ok());
+        let action = app.handle_search_mode_keys(key_event);
+        assert_eq!(action, AppKeyAction::Ok);
         assert_eq!(app.focus_state, FocusState::Normal);
         assert_eq!(app.search.value(), ""); // Search should be cleared
         assert_eq!(app.hosts.len(), 2); // All hosts should be visible again
@@ -1617,8 +1612,8 @@ mod tests {
         
         // Press Enter - should return to Normal mode but keep search filter
         let key_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        let result = app.handle_search_mode_keys(key_event);
-        assert!(result.is_ok());
+        let action = app.handle_search_mode_keys(key_event);
+        assert_eq!(action, AppKeyAction::Ok);
         assert_eq!(app.focus_state, FocusState::Normal);
         assert_eq!(app.search.value(), "test"); // Search should be preserved
         assert_eq!(app.hosts.len(), 1); // Filtered results should remain

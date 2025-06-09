@@ -336,22 +336,20 @@ fn render_confirmation_ui(f: &mut Frame, app: &mut App) {
     // Render buttons with styled keyboard shortcuts
     let action_text = app.confirm_action.as_deref().unwrap_or("Yes");
     
-    let mut button_spans = Vec::new();
-    
-    // Yes button
-    button_spans.push(Span::styled("(", Style::new().fg(tailwind::BLUE.c400)));
-    button_spans.push(Span::styled("Y", Style::new().fg(tailwind::GREEN.c500).add_modifier(Modifier::BOLD)));
-    button_spans.push(Span::styled(") ", Style::new().fg(tailwind::BLUE.c400)));
-    button_spans.push(Span::styled(action_text, Style::new().fg(tailwind::GREEN.c500)));
-    
-    // Separator
-    button_spans.push(Span::styled(" | ", Style::new().fg(tailwind::BLUE.c400)));
-    
-    // No button
-    button_spans.push(Span::styled("(", Style::new().fg(tailwind::BLUE.c400)));
-    button_spans.push(Span::styled("N", Style::new().fg(tailwind::RED.c500).add_modifier(Modifier::BOLD)));
-    button_spans.push(Span::styled(") ", Style::new().fg(tailwind::BLUE.c400)));
-    button_spans.push(Span::styled("Cancel", Style::new().fg(tailwind::RED.c500)));
+    let button_spans = vec![
+        // Yes button
+        Span::styled("(", Style::new().fg(tailwind::BLUE.c400)),
+        Span::styled("Y", Style::new().fg(tailwind::GREEN.c500).add_modifier(Modifier::BOLD)),
+        Span::styled(") ", Style::new().fg(tailwind::BLUE.c400)),
+        Span::styled(action_text, Style::new().fg(tailwind::GREEN.c500)),
+        // Separator
+        Span::styled(" | ", Style::new().fg(tailwind::BLUE.c400)),
+        // No button
+        Span::styled("(", Style::new().fg(tailwind::BLUE.c400)),
+        Span::styled("N", Style::new().fg(tailwind::RED.c500).add_modifier(Modifier::BOLD)),
+        Span::styled(") ", Style::new().fg(tailwind::BLUE.c400)),
+        Span::styled("Cancel", Style::new().fg(tailwind::RED.c500)),
+    ];
     
     let buttons_line = Line::from(button_spans);
     let buttons_paragraph = Paragraph::new(buttons_line)

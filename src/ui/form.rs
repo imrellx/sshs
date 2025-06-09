@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use crossterm::event::Event;
+use std::fmt::Write as FmtWrite;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use tui_input::{backend::crossterm::EventHandler, Input};
@@ -229,7 +230,7 @@ impl AddHostForm {
     /// # Errors
     /// 
     /// Will return `Err` if the file cannot be read
-    fn host_exists(&self, config_path: &str, host_name: &str) -> Result<bool> {
+    fn host_exists(config_path: &str, host_name: &str) -> Result<bool> {
         let file = File::open(config_path)
             .map_err(|e| anyhow!("Failed to open SSH config file: {}", e))?;
         
@@ -244,9 +245,9 @@ impl AddHostForm {
             let trimmed = line.trim();
             
             // Look for lines that start with "Host"
-            if trimmed.starts_with("Host ") {
-                // Extract the host pattern (everything after "Host ")
-                let pattern = trimmed["Host ".len()..].trim();
+            if let Some(stripped) = trimmed.strip_prefix("Host ") {
+                // Extract the host pattern
+                let pattern = stripped.trim();
                 
                 // Remove quotes for comparison if they exist
                 let clean_pattern = pattern.trim_matches('"');
@@ -272,7 +273,7 @@ impl AddHostForm {
         }
         
         let host_name = self.sanitize_host_name();
-        let host_exists = self.host_exists(config_path, &host_name)?;
+        let host_exists = Self::host_exists(config_path, &host_name)?;
         
         Ok(host_exists)
     }
@@ -296,14 +297,15 @@ impl AddHostForm {
         
         // Build the SSH config entry
         let mut entry = format!("\nHost {host_name}\n");
-        entry.push_str(&format!("  Hostname {destination}\n"));
+        
+        writeln!(entry, "  Hostname {destination}").unwrap();
         
         if let Some(username) = (!username.is_empty()).then_some(username) {
-            entry.push_str(&format!("  User {username}\n"));
+            writeln!(entry, "  User {username}").unwrap();
         }
         
         if let Some(port) = port {
-            entry.push_str(&format!("  Port {port}\n"));
+            writeln!(entry, "  Port {port}").unwrap();
         }
 
         // Check if the file exists
@@ -366,7 +368,7 @@ impl AddHostForm {
             .map_err(|e| anyhow!("Failed to create backup of SSH config file: {}", e))?;
 
         // Find and replace the host entry
-        let updated_content = self.replace_host_entry(&content, original_host)?;
+        let updated_content = self.replace_host_entry(&content, original_host);
 
         // Write the updated content back to the file
         fs::write(config_path, updated_content)
@@ -376,7 +378,7 @@ impl AddHostForm {
     }
     
     /// Replace a host entry in the SSH config content
-    fn replace_host_entry(&self, content: &str, original_host: &ssh::Host) -> Result<String> {
+    fn replace_host_entry(&self, content: &str, original_host: &ssh::Host) -> String {
         let lines: Vec<&str> = content.lines().collect();
         let mut result = Vec::new();
         let mut i = 0;
@@ -386,8 +388,8 @@ impl AddHostForm {
             let line = lines[i].trim();
             
             // Look for Host lines that match our original host name
-            if line.starts_with("Host ") {
-                let pattern = line["Host ".len()..].trim();
+            if let Some(stripped) = line.strip_prefix("Host ") {
+                let pattern = stripped.trim();
                 let clean_pattern = pattern.trim_matches('"');
                 
                 if clean_pattern == original_host.name {
@@ -416,7 +418,7 @@ impl AddHostForm {
             i += 1;
         }
         
-        Ok(result.join("\n"))
+        result.join("\n")
     }
     
     /// Build a complete host entry string
@@ -427,14 +429,15 @@ impl AddHostForm {
         let port = self.sanitize_port();
         
         let mut entry = format!("Host {host_name}");
-        entry.push_str(&format!("\n  Hostname {destination}"));
+        
+        writeln!(entry, "  Hostname {destination}").unwrap();
         
         if !username.is_empty() {
-            entry.push_str(&format!("\n  User {username}"));
+            writeln!(entry, "  User {username}").unwrap();
         }
         
         if let Some(port) = port {
-            entry.push_str(&format!("\n  Port {port}"));
+            writeln!(entry, "  Port {port}").unwrap();
         }
         
         entry
