@@ -230,13 +230,13 @@ fn render_form_ui(f: &mut Frame, app: &mut App) {
         
         // Add key with highlight
         help_spans.push(Span::styled(
-            format!("{}", key),
+            (*key).to_string(),
             Style::new().fg(app.palette.c500).add_modifier(Modifier::BOLD),
         ));
         
         // Add description
         help_spans.push(Span::styled(
-            format!(" {}", action),
+            format!(" {action}"),
             Style::new().fg(app.palette.c300),
         ));
     }
@@ -726,8 +726,7 @@ mod tests {
             .content
             .iter()
             .map(|c| c.symbol().to_string())
-            .collect::<Vec<_>>()
-            .join("");
+            .collect::<String>();
         
         content.contains(text)
     }

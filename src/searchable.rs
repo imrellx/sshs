@@ -20,7 +20,7 @@ where
             .field("filtered_len", &self.filtered.len())
             .field("vec", &self.vec)
             .field("filtered", &self.filtered)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

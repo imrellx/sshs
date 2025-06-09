@@ -197,11 +197,11 @@ impl App {
         
         // Handle any errors from the application run
         if let Err(err) = res {
-            eprintln!("Application error: {}", err);
+            eprintln!("Application error: {err}");
             // Also attempt to show the error cause chain for debugging
             let mut source = err.source();
             while let Some(err) = source {
-                eprintln!("Caused by: {}", err);
+                eprintln!("Caused by: {err}");
                 source = err.source();
             }
         }
@@ -493,14 +493,14 @@ impl App {
         // If we're in confirmation mode, handle that first
         if self.form_state == FormState::Confirming {
             match key.code {
-                Esc | Char('n') | Char('N') => {
+                Esc | Char('n' | 'N') => {
                     // Cancel the confirmation
                     self.form_state = FormState::Active;
                     self.confirm_message = None;
                     self.confirm_action = None;
                     return Ok(AppKeyAction::Ok);
                 },
-                Enter | Char('y') | Char('Y') => {
+                Enter | Char('y' | 'Y') => {
                     // Check if this is a delete confirmation
                     if let Some(action) = &self.confirm_action {
                         if action == "Delete" {
@@ -516,7 +516,7 @@ impl App {
                                     return Ok(AppKeyAction::Ok);
                                 }
                                 Err(e) => {
-                                    self.set_feedback_message(format!("Error deleting host: {}", e), true);
+                                    self.set_feedback_message(format!("Error deleting host: {e}"), true);
                                     self.confirm_message = None;
                                     self.confirm_action = None;
                                     self.editing_host_index = None;
@@ -557,7 +557,7 @@ impl App {
                             return Ok(AppKeyAction::Ok);
                         }
                         Err(e) => {
-                            self.set_feedback_message(format!("Error: {}", e), true);
+                            self.set_feedback_message(format!("Error: {e}"), true);
                             self.confirm_message = None;
                             self.confirm_action = None;
                             return Ok(AppKeyAction::Ok);
@@ -612,14 +612,14 @@ impl App {
                                         return Ok(AppKeyAction::Ok);
                                     }
                                     Err(e) => {
-                                        self.set_feedback_message(format!("Error: {}", e), true);
+                                        self.set_feedback_message(format!("Error: {e}"), true);
                                         return Ok(AppKeyAction::Ok);
                                     }
                                 }
                             },
                             Err(e) => {
                                 // Error checking for duplicates
-                                self.set_feedback_message(format!("Error checking for duplicates: {}", e), true);
+                                self.set_feedback_message(format!("Error checking for duplicates: {e}"), true);
                                 return Ok(AppKeyAction::Ok);
                             }
                         }
@@ -870,7 +870,7 @@ impl App {
             .map_err(|e| anyhow::anyhow!("Failed to read SSH config file: {}", e))?;
         
         // Create a backup of the original config file
-        let backup_path = format!("{}.bak", config_path);
+        let backup_path = format!("{config_path}.bak");
         fs::copy(config_path, &backup_path)
             .map_err(|e| anyhow::anyhow!("Failed to create backup of SSH config file: {}", e))?;
         
@@ -1011,7 +1011,7 @@ impl App {
         // Restore terminal for SSH session
         if let Err(e) = safe_restore_terminal(terminal) {
             // Even if restore fails, we should try to continue
-            eprintln!("Warning: Failed to restore terminal: {}", e);
+            eprintln!("Warning: Failed to restore terminal: {e}");
         }
 
         // Execute pre-session commands
@@ -1032,7 +1032,7 @@ impl App {
 
         if let Err(e) = safe_setup_terminal(terminal) {
             // If we can't restore the terminal, we should exit
-            eprintln!("Fatal error: Failed to setup terminal: {}", e);
+            eprintln!("Fatal error: Failed to setup terminal: {e}");
             return Err(e);
         }
 
@@ -1135,7 +1135,7 @@ impl App {
         match result {
             Ok(status) if status.success() => Ok(()),
             Ok(status) => Err(format!("SSH connection failed with exit code: {}", status.code().unwrap_or(-1))),
-            Err(e) => Err(format!("Failed to execute SSH command: {}", e))
+            Err(e) => Err(format!("Failed to execute SSH command: {e}"))
         }
     }
     
@@ -1150,7 +1150,7 @@ impl App {
     {
         // Set up terminal for our UI
         if let Err(e) = safe_setup_terminal(terminal) {
-            eprintln!("Warning: Failed to setup terminal for end screen: {}", e);
+            eprintln!("Warning: Failed to setup terminal for end screen: {e}");
             thread::sleep(Duration::from_millis(1000));
             return Ok(());
         }
@@ -1162,7 +1162,7 @@ impl App {
             // Create centered box
             let box_width = 50;
             let box_height = match ssh_result {
-                Ok(_) => 6,
+                Ok(()) => 6,
                 Err(_) => 10,
             };
             let x = (area.width.saturating_sub(box_width)) / 2;
@@ -1174,7 +1174,7 @@ impl App {
             f.render_widget(Clear, box_area);
             
             match ssh_result {
-                Ok(_) => {
+                Ok(()) => {
                     // Success - session ended normally
                     let end_text = vec![
                         Line::from(""),
@@ -1244,6 +1244,81 @@ impl App {
         thread::sleep(Duration::from_millis(1500));
         
         Ok(())
+    }
+}
+
+// Better error handling for terminal setup/teardown
+pub fn safe_setup_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
+where
+    B: Backend + std::io::Write,
+{
+    // First, try to restore the terminal in case it was left in a bad state
+    // We ignore errors here since we're just making sure we're starting fresh
+    let _ = disable_raw_mode();
+    let _ = {
+        let mut terminal_ref = terminal.borrow_mut();
+        execute!(terminal_ref.backend_mut(), Show, LeaveAlternateScreen, DisableMouseCapture)
+    };
+
+    // Now set up the terminal properly
+    enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {}", e))?;
+    
+    // Set up terminal features one by one to better identify issues
+    let mut terminal_ref = terminal.borrow_mut();
+    
+    execute!(terminal_ref.backend_mut(), Hide)
+        .map_err(|e| anyhow::anyhow!("Failed to hide cursor: {}", e))?;
+    
+    execute!(terminal_ref.backend_mut(), EnterAlternateScreen)
+        .map_err(|e| anyhow::anyhow!("Failed to enter alternate screen: {}", e))?;
+    
+    execute!(terminal_ref.backend_mut(), EnableMouseCapture)
+        .map_err(|e| anyhow::anyhow!("Failed to enable mouse capture: {}", e))?;
+    
+    Ok(())
+}
+
+pub fn safe_restore_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
+where
+    B: Backend + std::io::Write,
+{
+    // Gather errors rather than failing on the first one
+    let mut errors = Vec::new();
+    
+    // Try to clear terminal
+    if let Err(e) = terminal.borrow_mut().clear() {
+        errors.push(format!("Failed to clear terminal: {e}"));
+    }
+    
+    // Try to disable raw mode - very important to restore
+    if let Err(e) = disable_raw_mode() {
+        errors.push(format!("Failed to disable raw mode: {e}"));
+    }
+    
+    // Try to restore terminal state
+    {
+        let mut terminal_ref = terminal.borrow_mut();
+        
+        // Show cursor
+        if let Err(e) = execute!(terminal_ref.backend_mut(), Show) {
+            errors.push(format!("Failed to show cursor: {e}"));
+        }
+        
+        // Leave alternate screen
+        if let Err(e) = execute!(terminal_ref.backend_mut(), LeaveAlternateScreen) {
+            errors.push(format!("Failed to leave alternate screen: {e}"));
+        }
+        
+        // Disable mouse capture
+        if let Err(e) = execute!(terminal_ref.backend_mut(), DisableMouseCapture) {
+            errors.push(format!("Failed to disable mouse capture: {e}"));
+        }
+    }
+    
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Terminal restoration errors: {}", errors.join("; ")))
     }
 }
 
@@ -1334,7 +1409,7 @@ mod tests {
                 destination: "host1.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
             Host {
@@ -1342,7 +1417,7 @@ mod tests {
                 destination: "host2.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
             Host {
@@ -1350,7 +1425,7 @@ mod tests {
                 destination: "host3.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
         ];
@@ -1383,7 +1458,7 @@ mod tests {
                 destination: "host1.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
             Host {
@@ -1391,7 +1466,7 @@ mod tests {
                 destination: "host2.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
         ];
@@ -1417,7 +1492,7 @@ mod tests {
         
         // Set pending_g with an old timestamp
         app.pending_g = true;
-        app.last_key_time = Some(Instant::now() - Duration::from_millis(2000)); // 2 seconds ago
+        app.last_key_time = Some(Instant::now().checked_sub(Duration::from_millis(2000)).unwrap()); // 2 seconds ago
         
         // Simulate checking timeout - pending_g should be cleared
         if let Some(last_time) = app.last_key_time {
@@ -1459,7 +1534,7 @@ mod tests {
                 destination: "test.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
             Host {
@@ -1467,7 +1542,7 @@ mod tests {
                 destination: "prod.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
         ];
@@ -1510,7 +1585,7 @@ mod tests {
                 destination: "test.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
             Host {
@@ -1518,7 +1593,7 @@ mod tests {
                 destination: "prod.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
         ];
@@ -1561,7 +1636,7 @@ mod tests {
                 destination: "test1.example.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
             Host {
@@ -1569,7 +1644,7 @@ mod tests {
                 destination: "test2.example.com".to_string(),
                 user: None,
                 port: None,
-                aliases: "".to_string(),
+                aliases: String::new(),
                 proxy_command: None,
             },
         ];
@@ -1613,7 +1688,7 @@ mod tests {
         assert!(app.feedback_message.is_some());
         
         // Simulate timeout by setting feedback_timeout to an old time
-        app.feedback_timeout = Some(Instant::now() - Duration::from_secs(5));
+        app.feedback_timeout = Some(Instant::now().checked_sub(Duration::from_secs(5)).unwrap());
         app.check_feedback_timeout();
         assert!(app.feedback_message.is_none());
         assert!(app.feedback_timeout.is_none());
@@ -1646,7 +1721,7 @@ mod tests {
             destination: "test.com".to_string(),
             user: None,
             port: None,
-            aliases: "".to_string(),
+            aliases: String::new(),
             proxy_command: None,
         }];
         // Create proper search closure
@@ -1666,80 +1741,5 @@ mod tests {
         assert!(app.add_host_form.is_some());
         assert!(app.is_edit_mode);
         assert_eq!(app.editing_host_index, Some(0));
-    }
-}
-
-// Better error handling for terminal setup/teardown
-pub fn safe_setup_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
-where
-    B: Backend + std::io::Write,
-{
-    // First, try to restore the terminal in case it was left in a bad state
-    // We ignore errors here since we're just making sure we're starting fresh
-    let _ = disable_raw_mode();
-    let _ = {
-        let mut terminal_ref = terminal.borrow_mut();
-        execute!(terminal_ref.backend_mut(), Show, LeaveAlternateScreen, DisableMouseCapture)
-    };
-
-    // Now set up the terminal properly
-    enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {}", e))?;
-    
-    // Set up terminal features one by one to better identify issues
-    let mut terminal_ref = terminal.borrow_mut();
-    
-    execute!(terminal_ref.backend_mut(), Hide)
-        .map_err(|e| anyhow::anyhow!("Failed to hide cursor: {}", e))?;
-    
-    execute!(terminal_ref.backend_mut(), EnterAlternateScreen)
-        .map_err(|e| anyhow::anyhow!("Failed to enter alternate screen: {}", e))?;
-    
-    execute!(terminal_ref.backend_mut(), EnableMouseCapture)
-        .map_err(|e| anyhow::anyhow!("Failed to enable mouse capture: {}", e))?;
-    
-    Ok(())
-}
-
-pub fn safe_restore_terminal<B>(terminal: &Rc<RefCell<Terminal<B>>>) -> Result<()>
-where
-    B: Backend + std::io::Write,
-{
-    // Gather errors rather than failing on the first one
-    let mut errors = Vec::new();
-    
-    // Try to clear terminal
-    if let Err(e) = terminal.borrow_mut().clear() {
-        errors.push(format!("Failed to clear terminal: {}", e));
-    }
-    
-    // Try to disable raw mode - very important to restore
-    if let Err(e) = disable_raw_mode() {
-        errors.push(format!("Failed to disable raw mode: {}", e));
-    }
-    
-    // Try to restore terminal state
-    {
-        let mut terminal_ref = terminal.borrow_mut();
-        
-        // Show cursor
-        if let Err(e) = execute!(terminal_ref.backend_mut(), Show) {
-            errors.push(format!("Failed to show cursor: {}", e));
-        }
-        
-        // Leave alternate screen
-        if let Err(e) = execute!(terminal_ref.backend_mut(), LeaveAlternateScreen) {
-            errors.push(format!("Failed to leave alternate screen: {}", e));
-        }
-        
-        // Disable mouse capture
-        if let Err(e) = execute!(terminal_ref.backend_mut(), DisableMouseCapture) {
-            errors.push(format!("Failed to disable mouse capture: {}", e));
-        }
-    }
-    
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Terminal restoration errors: {}", errors.join("; ")))
     }
 }

@@ -136,6 +136,9 @@ project/
 
 ---
 
+## Repository Reference
+- This is the repository you should be committing to. Please use this repository at all times and no other repository: https://github.com/imrellx/sshs
+
 ## Remember
 - Ship working code frequently
 - Perfect is the enemy of good

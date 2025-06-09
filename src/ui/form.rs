@@ -108,10 +108,10 @@ impl AddHostForm {
         let username_valid = self.is_valid_username();
         
         // Check port is valid if provided
-        let port_valid = if !self.port.value().trim().is_empty() {
-            self.port.value().trim().parse::<u16>().is_ok()
-        } else {
+        let port_valid = if self.port.value().trim().is_empty() {
             true // Empty port is valid (will use default SSH port)
+        } else {
+            self.port.value().trim().parse::<u16>().is_ok()
         };
         
         has_required_fields && hostname_valid && username_valid && port_valid
@@ -195,7 +195,7 @@ impl AddHostForm {
         // If the host name doesn't have quotes already, wrap it in quotes to handle spaces
         // If it already has quotes, use it as is (trimmed)
         if !host_name.starts_with('"') && !host_name.ends_with('"') && host_name.contains(' ') {
-            format!("\"{}\"", host_name)
+            format!("\"{host_name}\"")
         } else {
             host_name.to_string()
         }
@@ -290,20 +290,20 @@ impl AddHostForm {
 
         // Sanitize inputs and prepare the SSH config entry
         let host_name = self.sanitize_host_name();
-        let hostname = self.sanitize_hostname();
+        let destination = self.sanitize_hostname();
         let username = self.sanitize_username();
         let port = self.sanitize_port();
         
         // Build the SSH config entry
-        let mut entry = format!("\nHost {}\n", host_name);
-        entry.push_str(&format!("  Hostname {}\n", hostname));
+        let mut entry = format!("\nHost {host_name}\n");
+        entry.push_str(&format!("  Hostname {destination}\n"));
         
-        if let Some(username) = (!username.is_empty()).then(|| username) {
-            entry.push_str(&format!("  User {}\n", username));
+        if let Some(username) = (!username.is_empty()).then_some(username) {
+            entry.push_str(&format!("  User {username}\n"));
         }
         
         if let Some(port) = port {
-            entry.push_str(&format!("  Port {}\n", port));
+            entry.push_str(&format!("  Port {port}\n"));
         }
 
         // Check if the file exists
@@ -314,7 +314,7 @@ impl AddHostForm {
         // Note: We no longer need to check for duplicates here, since the app handles it before calling this method
 
         // Create a backup of the original config file
-        let backup_path = format!("{}.bak", config_path);
+        let backup_path = format!("{config_path}.bak");
         fs::copy(config_path, &backup_path)
             .map_err(|e| anyhow!("Failed to create backup of SSH config file: {}", e))?;
 
@@ -361,7 +361,7 @@ impl AddHostForm {
             .map_err(|e| anyhow!("Failed to read SSH config file: {}", e))?;
 
         // Create a backup of the original config file
-        let backup_path = format!("{}.bak", config_path);
+        let backup_path = format!("{config_path}.bak");
         fs::copy(config_path, &backup_path)
             .map_err(|e| anyhow!("Failed to create backup of SSH config file: {}", e))?;
 
@@ -422,19 +422,19 @@ impl AddHostForm {
     /// Build a complete host entry string
     fn build_host_entry(&self) -> String {
         let host_name = self.sanitize_host_name();
-        let hostname = self.sanitize_hostname();
+        let destination = self.sanitize_hostname();
         let username = self.sanitize_username();
         let port = self.sanitize_port();
         
-        let mut entry = format!("Host {}", host_name);
-        entry.push_str(&format!("\n  Hostname {}", hostname));
+        let mut entry = format!("Host {host_name}");
+        entry.push_str(&format!("\n  Hostname {destination}"));
         
         if !username.is_empty() {
-            entry.push_str(&format!("\n  User {}", username));
+            entry.push_str(&format!("\n  User {username}"));
         }
         
         if let Some(port) = port {
-            entry.push_str(&format!("\n  Port {}", port));
+            entry.push_str(&format!("\n  Port {port}"));
         }
         
         entry
@@ -531,7 +531,7 @@ mod tests {
         form.port = Input::from("  22  ".to_string());
         assert_eq!(form.sanitize_port(), Some("22".to_string()));
         
-        form.port = Input::from("".to_string());
+        form.port = Input::from(String::new());
         assert_eq!(form.sanitize_port(), None);
     }
 
@@ -587,7 +587,7 @@ mod tests {
         assert!(content.contains("Port 2222"));
 
         // Verify backup file was created
-        let backup_path = format!("{}.bak", temp_path);
+        let backup_path = format!("{temp_path}.bak");
         assert!(std::path::Path::new(&backup_path).exists());
 
         // Clean up
@@ -620,7 +620,7 @@ mod tests {
             destination: "test.example.com".to_string(),
             user: Some("testuser".to_string()),
             port: Some("2222".to_string()),
-            aliases: "".to_string(),
+            aliases: String::new(),
             proxy_command: None,
         };
 
@@ -646,7 +646,7 @@ mod tests {
         writeln!(temp_file, "  Hostname old.example.com")?;
         writeln!(temp_file, "  User olduser")?;
         writeln!(temp_file, "  Port 22")?;
-        writeln!(temp_file, "")?;
+        writeln!(temp_file)?;
         writeln!(temp_file, "Host another-host")?;
         writeln!(temp_file, "  Hostname another.example.com")?;
 
@@ -656,7 +656,7 @@ mod tests {
             destination: "old.example.com".to_string(),
             user: Some("olduser".to_string()),
             port: Some("22".to_string()),
-            aliases: "".to_string(),
+            aliases: String::new(),
             proxy_command: None,
         };
 
@@ -688,7 +688,7 @@ mod tests {
         assert!(!content.contains("old.example.com"));
 
         // Verify backup file was created
-        let backup_path = format!("{}.bak", temp_path);
+        let backup_path = format!("{temp_path}.bak");
         assert!(std::path::Path::new(&backup_path).exists());
 
         // Clean up
