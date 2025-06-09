@@ -9,7 +9,7 @@ use style::palette::tailwind;
 use super::app::{
     App, CURSOR_HORIZONTAL_PADDING, CURSOR_VERTICAL_OFFSET, FOOTER_HEIGHT,
     SEARCH_BAR_HEIGHT, SEARCHBAR_HORIZONTAL_PADDING, TABLE_HEADER_HEIGHT,
-    TABLE_MIN_HEIGHT,
+    TABLE_MIN_HEIGHT, FocusState,
 };
 use super::form::FormState;
 
@@ -24,6 +24,17 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
 /// Render the main UI
 fn render_main_ui(f: &mut Frame, app: &mut App) {
+    // If we have active sessions, show tab-based UI
+    if !app.tab_manager.is_empty() {
+        render_tabbed_ui(f, app);
+    } else {
+        // Show host selection UI
+        render_host_selection_ui(f, app);
+    }
+}
+
+/// Render the host selection UI (when no tabs are open)
+fn render_host_selection_ui(f: &mut Frame, app: &mut App) {
     let rects = Layout::vertical([
         Constraint::Length(SEARCH_BAR_HEIGHT),
         Constraint::Min(TABLE_MIN_HEIGHT),
@@ -41,11 +52,49 @@ fn render_main_ui(f: &mut Frame, app: &mut App) {
     }
 
     // Show cursor only in search mode
-    if matches!(app.focus_state, crate::ui::app::FocusState::Search) {
+    if matches!(app.focus_state, FocusState::Search) {
         let mut cursor_position = rects[0].as_position();
         cursor_position.x += u16::try_from(app.search.cursor()).unwrap_or_default() + CURSOR_HORIZONTAL_PADDING;
         cursor_position.y += CURSOR_VERTICAL_OFFSET;
         f.set_cursor_position(cursor_position);
+    }
+}
+
+/// Render the tabbed UI (when sessions are active)
+fn render_tabbed_ui(f: &mut Frame, app: &mut App) {
+    let main_rects = Layout::vertical([
+        Constraint::Length(3), // Tab bar height
+        Constraint::Min(0),    // Session content
+        Constraint::Length(FOOTER_HEIGHT),
+    ])
+    .split(f.area());
+
+    // Render tab bar
+    let tabs_widget = app.tab_manager.render_tab_bar(main_rects[0]);
+    f.render_widget(tabs_widget, main_rects[0]);
+
+    // Render active session content or host selection
+    match app.focus_state {
+        FocusState::Session => {
+            // Show active SSH session
+            render_active_session(f, app, main_rects[1]);
+        }
+        FocusState::Normal | FocusState::Search => {
+            // Show host selection overlay for creating new sessions
+            render_host_selection_overlay(f, app, main_rects[1]);
+        }
+        FocusState::SessionManager => {
+            // Show session manager overlay
+            render_session_manager_overlay(f, app, main_rects[1]);
+        }
+    }
+
+    // Render footer
+    render_footer_with_tabs(f, app, main_rects[2]);
+
+    // Show feedback message if present
+    if let Some(message) = &app.feedback_message {
+        render_feedback(f, message, app.is_feedback_error);
     }
 }
 
@@ -491,6 +540,16 @@ pub fn render_footer_with_mode(f: &mut Frame, app: &mut App, area: Rect) {
             let shortcuts = "(type to search) | (enter) keep filter | (esc) clear & exit | (Ctrl+F) also opens search";
             (mode, shortcuts)
         }
+        crate::ui::app::FocusState::Session => {
+            let mode = "-- SESSION --";
+            let shortcuts = "(esc) back to hosts | (gt) next tab | (gT) prev tab | (Ctrl+W) close | (q) quit";
+            (mode, shortcuts)
+        }
+        crate::ui::app::FocusState::SessionManager => {
+            let mode = "-- SESSION MANAGER --";
+            let shortcuts = "(esc/q) close manager | (enter) switch | (d) disconnect | (n) new session";
+            (mode, shortcuts)
+        }
     };
     
     // Create the footer text with mode indicator and shortcuts
@@ -512,6 +571,218 @@ pub fn render_footer_with_mode(f: &mut Frame, app: &mut App, area: Rect) {
 /// Render the footer (legacy function - kept for compatibility)
 pub fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
     render_footer_with_mode(f, app, area);
+}
+
+/// Render the active SSH session
+fn render_active_session(f: &mut Frame, app: &mut App, area: Rect) {
+    if let Some(session) = app.tab_manager.get_active_session() {
+        // Create a terminal view showing the session output
+        let terminal_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.palette.c400))
+            .title(format!(" {} ", session.display_name))
+            .title_style(Style::default().fg(app.palette.c500).add_modifier(Modifier::BOLD));
+
+        // For now, show a placeholder for the terminal content
+        let terminal_content = vec![
+            Line::from(""),
+            Line::from(Span::styled("SSH Terminal Session", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Host: ", Style::default().fg(app.palette.c300)),
+                Span::styled(&session.host.destination, Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("User: ", Style::default().fg(app.palette.c300)),
+                Span::styled(session.host.user.as_deref().unwrap_or("default"), Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(app.palette.c300)),
+                Span::styled(
+                    format!("{:?}", session.state),
+                    match session.state {
+                        super::session::ConnectionState::Connected => Style::default().fg(Color::Green),
+                        super::session::ConnectionState::Connecting => Style::default().fg(Color::Yellow),
+                        super::session::ConnectionState::Disconnected => Style::default().fg(Color::Red),
+                        super::session::ConnectionState::Error(_) => Style::default().fg(Color::Red),
+                        super::session::ConnectionState::Reconnecting => Style::default().fg(Color::Yellow),
+                    }
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("Terminal output will appear here...", Style::default().fg(app.palette.c300))),
+            Line::from(""),
+            Line::from(Span::styled("TODO: Implement VT100 terminal rendering", Style::default().fg(Color::Yellow))),
+        ];
+
+        let terminal_paragraph = Paragraph::new(terminal_content)
+            .block(terminal_block)
+            .wrap(ratatui::widgets::Wrap { trim: true });
+
+        f.render_widget(terminal_paragraph, area);
+    } else {
+        // No active session
+        let placeholder = Paragraph::new("No active session")
+            .block(Block::default().borders(Borders::ALL).title(" Session "))
+            .style(Style::default().fg(app.palette.c300));
+        f.render_widget(placeholder, area);
+    }
+}
+
+/// Render host selection overlay for creating new sessions
+fn render_host_selection_overlay(f: &mut Frame, app: &mut App, area: Rect) {
+    // Create a smaller area for the host selection
+    let overlay_area = Layout::vertical([
+        Constraint::Length(3), // Search bar
+        Constraint::Min(0),    // Host table
+        Constraint::Length(2), // Instructions
+    ])
+    .split(area);
+
+    // Render search bar
+    render_searchbar(f, app, overlay_area[0]);
+    
+    // Render host table
+    render_table(f, app, overlay_area[1]);
+    
+    // Render instructions
+    let instructions = Paragraph::new("Press Enter to connect to selected host in new tab, or use Ctrl+T")
+        .style(Style::default().fg(app.palette.c300))
+        .alignment(Alignment::Center);
+    f.render_widget(instructions, overlay_area[2]);
+
+    // Show cursor in search mode
+    if matches!(app.focus_state, FocusState::Search) {
+        let mut cursor_position = overlay_area[0].as_position();
+        cursor_position.x += u16::try_from(app.search.cursor()).unwrap_or_default() + CURSOR_HORIZONTAL_PADDING;
+        cursor_position.y += CURSOR_VERTICAL_OFFSET;
+        f.set_cursor_position(cursor_position);
+    }
+}
+
+/// Render session manager overlay
+fn render_session_manager_overlay(f: &mut Frame, app: &mut App, area: Rect) {
+    // Create a centered dialog for the session manager
+    let dialog_area = {
+        let margin_horizontal = area.width / 6;
+        let margin_vertical = area.height / 6;
+        Rect {
+            x: area.x + margin_horizontal,
+            y: area.y + margin_vertical,
+            width: area.width.saturating_sub(margin_horizontal * 2),
+            height: area.height.saturating_sub(margin_vertical * 2),
+        }
+    };
+
+    // Clear the background
+    f.render_widget(Clear, dialog_area);
+
+    // Get session statistics
+    let session_stats = app.tab_manager.get_session_stats();
+    
+    // Create table rows
+    let rows: Vec<Row> = session_stats
+        .iter()
+        .map(|stat| {
+            let status_symbol = match stat.state {
+                super::session::ConnectionState::Connected => "●",
+                super::session::ConnectionState::Connecting => "○",
+                super::session::ConnectionState::Disconnected => "✗",
+                super::session::ConnectionState::Error(_) => "!",
+                super::session::ConnectionState::Reconnecting => "↻",
+            };
+            
+            let status_color = match stat.state {
+                super::session::ConnectionState::Connected => Color::Green,
+                super::session::ConnectionState::Connecting => Color::Yellow,
+                super::session::ConnectionState::Disconnected => Color::Red,
+                super::session::ConnectionState::Error(_) => Color::Red,
+                super::session::ConnectionState::Reconnecting => Color::Yellow,
+            };
+
+            let activity_bars = "●●●○○"; // Placeholder for activity indicator
+            let uptime = format!("{}m", stat.stats.uptime.as_secs() / 60);
+            
+            Row::new([
+                Cell::from(stat.tab_number.to_string()).style(Style::default().fg(app.palette.c300)),
+                Cell::from(stat.name.clone()).style(if stat.is_active {
+                    Style::default().fg(app.palette.c100).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                }),
+                Cell::from(stat.host.clone()).style(Style::default().fg(app.palette.c300)),
+                Cell::from(status_symbol).style(Style::default().fg(status_color)),
+                Cell::from(activity_bars).style(Style::default().fg(app.palette.c400)),
+                Cell::from(uptime).style(Style::default().fg(app.palette.c300)),
+            ])
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(3),  // Tab
+            Constraint::Min(15),    // Name
+            Constraint::Min(20),    // Host
+            Constraint::Length(6),  // Status
+            Constraint::Length(8),  // Activity
+            Constraint::Length(8),  // Uptime
+        ]
+    )
+    .header(
+        Row::new(["Tab", "Name", "Host", "Status", "Activity", "Uptime"])
+            .style(Style::default().fg(app.palette.c500).add_modifier(Modifier::BOLD))
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.palette.c400))
+            .title(" Session Manager ")
+            .title_style(Style::default().fg(app.palette.c500).add_modifier(Modifier::BOLD))
+    );
+
+    f.render_widget(table, dialog_area);
+
+    // Render instructions at the bottom
+    let instructions_area = Rect {
+        x: dialog_area.x,
+        y: dialog_area.y + dialog_area.height - 3,
+        width: dialog_area.width,
+        height: 2,
+    };
+
+    let instructions = Paragraph::new("Commands: Enter=Switch, D=Disconnect, R=Rename, N=New Session, X=Close, Q=Quit Manager")
+        .style(Style::default().fg(app.palette.c300))
+        .alignment(Alignment::Center)
+        .wrap(ratatui::widgets::Wrap { trim: true });
+
+    f.render_widget(instructions, instructions_area);
+}
+
+/// Render footer with tab information
+fn render_footer_with_tabs(f: &mut Frame, app: &mut App, area: Rect) {
+    let session_count = app.tab_manager.session_count();
+    let active_tab = app.tab_manager.get_active_tab_index() + 1;
+    
+    let footer_text = if session_count > 0 {
+        format!(
+            "Tab {}/{} | (gt) next tab | (gT) prev tab | (Ctrl+T) new | (Ctrl+W) close | (Ctrl+Shift+S) manager | (q) quit",
+            active_tab, session_count
+        )
+    } else {
+        "(Enter) connect | (Ctrl+T) new tab | (Ctrl+N) new host | (q) quit".to_string()
+    };
+
+    let footer = Paragraph::new(footer_text)
+        .style(Style::default().fg(app.palette.c400))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(app.palette.c700))
+        );
+
+    f.render_widget(footer, area);
 }
 
 #[cfg(test)]
@@ -538,6 +809,9 @@ mod tests {
             exit_after_ssh_session_ends: false,
         };
 
+        let session_config = crate::ui::session::SessionConfig::default();
+        let tab_manager = crate::ui::tabs::TabManager::new(session_config, tailwind::BLUE);
+
         App {
             config,
             search: Input::default(),
@@ -551,6 +825,7 @@ mod tests {
                 Constraint::Length(10),
             ],
             palette: tailwind::BLUE,
+            tab_manager,
             add_host_form: None,
             form_state: FormState::Hidden,
             feedback_message: None,
@@ -563,6 +838,8 @@ mod tests {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
+            pending_gt: false,
+            pending_number: None,
         }
     }
 

@@ -27,6 +27,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{searchable::Searchable, ssh};
 use super::form::{AddHostForm, FormState};
+use super::session::SessionConfig;
+use super::tabs::TabManager;
 
 // UI Constants
 pub const INFO_TEXT: &str = "(Esc) quit | (↑) move up | (↓) move down | (enter) select | (Ctrl+N) new host | (Ctrl+E) edit host";
@@ -46,6 +48,10 @@ pub enum FocusState {
     Normal,
     /// Search mode - focus on search field for typing
     Search,
+    /// Session mode - focus on active SSH session
+    Session,
+    /// Session manager overlay mode
+    SessionManager,
 }
 
 #[derive(Clone, Debug)]
@@ -73,6 +79,9 @@ pub struct App {
 
     pub palette: tailwind::Palette,
     
+    // Tab-based SSH session management
+    pub tab_manager: TabManager,
+    
     // Add/Edit Host Form
     pub add_host_form: Option<AddHostForm>,
     pub form_state: FormState,
@@ -86,10 +95,12 @@ pub struct App {
     pub confirm_message: Option<String>,
     pub confirm_action: Option<String>,
     
-    // Vim-like navigation
+    // Vim-like navigation and tab navigation
     pub focus_state: FocusState,
     pub last_key_time: Option<Instant>,
     pub pending_g: bool, // For detecting "gg" sequence
+    pub pending_gt: bool, // For detecting "gt" sequence
+    pub pending_number: Option<u8>, // For detecting "[1-9]gt" sequences
     
 }
 
@@ -135,6 +146,9 @@ impl App {
         let search_input = config.search_filter.clone().unwrap_or_default();
         let matcher = SkimMatcherV2::default();
 
+        let session_config = SessionConfig::default();
+        let tab_manager = TabManager::new(session_config, tailwind::BLUE);
+
         let mut app = App {
             config: config.clone(),
 
@@ -143,6 +157,8 @@ impl App {
             table_state: TableState::default().with_selected(0),
             table_columns_constraints: Vec::new(),
             palette: tailwind::BLUE,
+
+            tab_manager,
 
             hosts: Searchable::new(
                 hosts,
@@ -171,6 +187,8 @@ impl App {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
+            pending_gt: false,
+            pending_number: None,
         };
         app.calculate_table_columns_constraints();
 
@@ -224,6 +242,9 @@ impl App {
         loop {
             // Check if feedback message should be cleared due to timeout
             self.check_feedback_timeout();
+            
+            // Process pending SSH session data
+            self.tab_manager.process_all_sessions();
             
             terminal.borrow_mut().draw(|f| super::render::ui(f, self))?;
 
@@ -316,9 +337,18 @@ impl App {
     {
 
         let is_ctrl_pressed = key.modifiers.contains(KeyModifiers::CONTROL);
+        let is_shift_pressed = key.modifiers.contains(KeyModifiers::SHIFT);
 
-        // Handle global Ctrl shortcuts first
-        if is_ctrl_pressed {
+        // Handle global Ctrl+Shift shortcuts first
+        if is_ctrl_pressed && is_shift_pressed {
+            let action = self.on_key_press_ctrl_shift(key);
+            if action != AppKeyAction::Continue {
+                return Ok(action);
+            }
+        }
+
+        // Handle global Ctrl shortcuts
+        if is_ctrl_pressed && !is_shift_pressed {
             let action = self.on_key_press_ctrl(key);
             if action != AppKeyAction::Continue {
                 return Ok(action);
@@ -329,12 +359,14 @@ impl App {
         match self.focus_state {
             FocusState::Normal => self.handle_normal_mode_keys(terminal, key),
             FocusState::Search => self.handle_search_mode_keys(key),
+            FocusState::Session => self.handle_session_mode_keys(key),
+            FocusState::SessionManager => self.handle_session_manager_keys(key),
         }
     }
     
     fn handle_normal_mode_keys<B>(
         &mut self,
-        terminal: &Rc<RefCell<Terminal<B>>>,
+        _terminal: &Rc<RefCell<Terminal<B>>>,
         key: KeyEvent,
     ) -> Result<AppKeyAction>
     where
@@ -343,11 +375,13 @@ impl App {
         #[allow(clippy::enum_glob_use)]
         use KeyCode::*;
 
-        // Check for timeout on pending 'g' key
-        if self.pending_g {
+        // Check for timeout on pending sequences
+        if self.pending_g || self.pending_gt || self.pending_number.is_some() {
             if let Some(last_time) = self.last_key_time {
                 if last_time.elapsed() > Duration::from_millis(1000) {
                     self.pending_g = false;
+                    self.pending_gt = false;
+                    self.pending_number = None;
                     self.last_key_time = None;
                 }
             }
@@ -371,11 +405,53 @@ impl App {
                     self.table_state.select(Some(0));
                     self.pending_g = false;
                     self.last_key_time = None;
+                } else if self.pending_number.is_some() {
+                    // [1-9]g followed by 't' would be handled in 't' case
+                    self.pending_g = true;
+                    self.last_key_time = Some(Instant::now());
                 } else {
                     // First 'g' - start sequence
                     self.pending_g = true;
                     self.last_key_time = Some(Instant::now());
                 }
+            }
+            
+            // Tab navigation - gt (next tab)
+            Char('t') => {
+                if self.pending_g {
+                    // gt - next tab
+                    self.tab_manager.next_tab();
+                    self.focus_state = FocusState::Session;
+                    self.pending_g = false;
+                    self.last_key_time = None;
+                } else if let Some(number) = self.pending_number {
+                    // [1-9]gt - go to specific tab
+                    if let Err(e) = self.tab_manager.goto_tab(number as usize) {
+                        self.set_feedback_message(format!("Tab navigation error: {}", e), true);
+                    } else {
+                        self.focus_state = FocusState::Session;
+                    }
+                    self.pending_number = None;
+                    self.last_key_time = None;
+                }
+            }
+            
+            // Tab navigation - gT (previous tab)  
+            Char('T') => {
+                if self.pending_g {
+                    // gT - previous tab
+                    self.tab_manager.previous_tab();
+                    self.focus_state = FocusState::Session;
+                    self.pending_g = false;
+                    self.last_key_time = None;
+                }
+            }
+            
+            // Number prefixes for tab navigation [1-9]gt
+            Char(c @ '1'..='9') => {
+                let digit = c.to_digit(10).unwrap() as u8;
+                self.pending_number = Some(digit);
+                self.last_key_time = Some(Instant::now());
             }
             
             // Search mode transitions
@@ -413,9 +489,18 @@ impl App {
                 self.table_state.select(Some(target));
             }
             
-            // Connect to host
+            // Connect to host in new tab
             Enter => {
-                return self.connect_to_selected_host(terminal);
+                if let Some(selected) = self.table_state.selected() {
+                    if selected < self.hosts.len() {
+                        let host = self.hosts[selected].clone();
+                        if let Err(e) = self.create_ssh_session_from_host(host) {
+                            self.set_feedback_message(format!("Failed to create session: {}", e), true);
+                        } else {
+                            self.focus_state = FocusState::Session;
+                        }
+                    }
+                }
             }
             
             // Tab for alternative navigation
@@ -425,9 +510,11 @@ impl App {
             _ => return Ok(AppKeyAction::Continue),
         }
 
-        // Clear pending 'g' for any other key
-        if !matches!(key.code, Char('g')) {
+        // Clear pending states for any other key
+        if !matches!(key.code, Char('g') | Char('t') | Char('T') | Char('1'..='9')) {
             self.pending_g = false;
+            self.pending_gt = false;
+            self.pending_number = None;
             self.last_key_time = None;
         }
 
@@ -487,7 +574,117 @@ impl App {
                 self.previous();
                 AppKeyAction::Ok
             }
+            Char('t') => {
+                // Ctrl+T to create new SSH session tab from selected host
+                if let Some(selected) = self.table_state.selected() {
+                    if selected < self.hosts.len() {
+                        let host = self.hosts[selected].clone();
+                        if let Err(e) = self.create_ssh_session_from_host(host) {
+                            self.set_feedback_message(format!("Failed to create session: {}", e), true);
+                        }
+                    }
+                }
+                AppKeyAction::Ok
+            }
+            Char('w') => {
+                // Ctrl+W to close current tab
+                if !self.tab_manager.is_empty() {
+                    if let Err(e) = self.tab_manager.close_current_tab() {
+                        self.set_feedback_message(format!("Failed to close tab: {}", e), true);
+                    }
+                }
+                AppKeyAction::Ok
+            }
+            Tab => {
+                // Ctrl+Tab for next tab
+                self.tab_manager.next_tab();
+                self.focus_state = FocusState::Session;
+                AppKeyAction::Ok
+            }
+            BackTab => {
+                // Ctrl+Shift+Tab for previous tab
+                self.tab_manager.previous_tab();
+                self.focus_state = FocusState::Session;
+                AppKeyAction::Ok
+            }
             _ => AppKeyAction::Continue,
+        }
+    }
+    
+    fn on_key_press_ctrl_shift(&mut self, key: KeyEvent) -> AppKeyAction {
+        #[allow(clippy::enum_glob_use)]
+        use KeyCode::*;
+
+        match key.code {
+            Char('s') | Char('S') => {
+                // Ctrl+Shift+S to toggle session manager overlay
+                if !self.tab_manager.is_empty() {
+                    self.focus_state = match self.focus_state {
+                        FocusState::SessionManager => FocusState::Session,
+                        _ => FocusState::SessionManager,
+                    };
+                }
+                AppKeyAction::Ok
+            }
+            _ => AppKeyAction::Continue,
+        }
+    }
+    
+    fn handle_session_mode_keys(&mut self, key: KeyEvent) -> Result<AppKeyAction> {
+        #[allow(clippy::enum_glob_use)]
+        use KeyCode::*;
+
+        match key.code {
+            Esc => {
+                // Return to host selection
+                self.focus_state = FocusState::Normal;
+                Ok(AppKeyAction::Ok)
+            }
+            Char('q') => {
+                // Quit application
+                Ok(AppKeyAction::Stop)
+            }
+            _ => {
+                // Forward other keys to the active session
+                if let Some(_session) = self.tab_manager.get_active_session() {
+                    // TODO: Forward key input to active SSH session
+                    // For now, just ignore other keys in session mode
+                }
+                Ok(AppKeyAction::Ok)
+            }
+        }
+    }
+    
+    fn handle_session_manager_keys(&mut self, key: KeyEvent) -> Result<AppKeyAction> {
+        #[allow(clippy::enum_glob_use)]
+        use KeyCode::*;
+
+        match key.code {
+            Esc | Char('q') | Char('Q') => {
+                // Exit session manager
+                self.focus_state = FocusState::Session;
+                Ok(AppKeyAction::Ok)
+            }
+            Enter => {
+                // Switch to selected session (placeholder)
+                self.focus_state = FocusState::Session;
+                Ok(AppKeyAction::Ok)
+            }
+            Char('d') | Char('D') => {
+                // Disconnect session (placeholder)
+                if !self.tab_manager.is_empty() {
+                    if let Err(e) = self.tab_manager.close_current_tab() {
+                        self.set_feedback_message(format!("Failed to close tab: {}", e), true);
+                    }
+                }
+                Ok(AppKeyAction::Ok)
+            }
+            Char('n') | Char('N') => {
+                // Create new session - switch to host selection
+                self.focus_state = FocusState::Normal;
+                Ok(AppKeyAction::Ok)
+            }
+            _ => Ok(AppKeyAction::Ok),
         }
     }
     
@@ -995,6 +1192,35 @@ impl App {
         Ok(())
     }
     
+    
+    /// Create a new SSH session from a host (non-async wrapper)
+    fn create_ssh_session_from_host(&mut self, host: ssh::Host) -> Result<()> {
+        // For now, create a placeholder session that will connect asynchronously
+        // This is a synchronous wrapper that starts the async connection process
+        
+        // Check if we already have a session for this host
+        if self.tab_manager.has_session_for_host(&host.name) {
+            // Switch to existing session
+            if let Some(index) = self.tab_manager.find_session_by_host(&host.name) {
+                self.tab_manager.goto_tab(index + 1)?; // 1-based indexing
+            }
+            return Ok(());
+        }
+
+        // Create session config
+        let session_config = SessionConfig::default();
+        let _session = super::session::SshSession::new(host, session_config);
+        
+        // Use the tab manager's create_session method (but we need async for that)
+        // For now, create a simplified version that just adds a placeholder session
+        
+        // TODO: Implement proper async session creation
+        // This is a temporary implementation to get the structure working
+        
+        self.set_feedback_message("Creating session...".to_string(), false);
+        
+        Ok(())
+    }
     
     fn connect_to_selected_host<B>(
         &mut self,
