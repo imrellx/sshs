@@ -564,7 +564,16 @@ mod tests {
         
         let (start, end) = manager.get_visible_tab_range();
         assert!(end - start <= MAX_VISIBLE_TABS);
-        assert!(manager.overflow.has_right_overflow);
+        assert_eq!(manager.session_count(), 15, "Should have 15 sessions");
+        
+        // Since the active tab is the last one (14), it centers on it
+        // and shows tabs 5-14, so there should be left overflow but no right overflow
+        assert!(manager.overflow.has_left_overflow, "Should have left overflow");
+        assert!(!manager.overflow.has_right_overflow, "Should not have right overflow when showing last tabs");
+        
+        // Test right overflow by going to an earlier tab
+        manager.goto_tab(6).unwrap(); // Go to tab 6 (0-based index 5)
+        assert!(manager.overflow.has_right_overflow, "Should have right overflow when active tab is in the middle");
     }
 
     #[test]

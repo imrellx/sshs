@@ -1,6 +1,7 @@
 use anyhow::Result;
 use portable_pty::{CommandBuilder, PtySize, Child, MasterPty};
 use std::collections::VecDeque;
+use std::io::{Read, Write};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use std::thread;
@@ -85,11 +86,9 @@ impl TerminalBuffer {
         self.parser.process(data);
         self.has_new_output = true;
         
-        // Extract new lines from the parser screen
-        let screen = self.parser.screen();
-        let contents = screen.contents();
-        
-        // Add new content to scrollback
+        // The VT100 parser handles all the complex terminal emulation
+        // We can optionally maintain a scrollback buffer for search functionality
+        let contents = self.parser.screen().contents();
         for line in contents.lines() {
             self.scrollback.push_back(line.to_string());
             
@@ -129,10 +128,20 @@ impl TerminalBuffer {
     /// Search within the terminal buffer
     pub fn search(&self, query: &str) -> Vec<(usize, String)> {
         let mut results = Vec::new();
+        let screen = self.parser.screen();
         
+        // Get the screen contents as a single string and search line by line
+        let contents = screen.contents();
+        for (row, line) in contents.lines().enumerate() {
+            if line.to_lowercase().contains(&query.to_lowercase()) {
+                results.push((row, line.to_string()));
+            }
+        }
+        
+        // Also search through scrollback if available
         for (i, line) in self.scrollback.iter().enumerate() {
             if line.to_lowercase().contains(&query.to_lowercase()) {
-                results.push((i, line.clone()));
+                results.push((i + contents.lines().count(), line.clone()));
             }
         }
         
@@ -280,19 +289,65 @@ impl SshSession {
 
     /// Set up channels for reading PTY data
     fn setup_data_channels(&mut self) -> Result<()> {
-        if let Some(_pty_master) = &mut self.pty_master {
+        if let Some(pty_master) = &mut self.pty_master {
             let (data_tx, data_rx) = mpsc::channel();
-            let (cmd_tx, _cmd_rx) = mpsc::channel();
+            let (cmd_tx, cmd_rx) = mpsc::channel();
             
             self.data_receiver = Some(data_rx);
             self.command_sender = Some(cmd_tx);
             
-            // TODO: Implement proper PTY data handling
-            // For now, just set up the channels without background threads
-            // This will be implemented in a future iteration
+            // Get reader and writer from the PTY master
+            let mut pty_reader = pty_master.try_clone_reader()?;
+            let mut pty_writer = pty_master.take_writer()?;
             
-            // Placeholder: simulate some data
-            let _ = data_tx.send(b"SSH session connected...\n".to_vec());
+            // Spawn background thread for reading PTY output
+            let data_sender = data_tx.clone();
+            thread::spawn(move || {
+                let mut buffer = [0u8; 8192];
+                loop {
+                    match pty_reader.read(&mut buffer) {
+                        Ok(0) => {
+                            // EOF - connection closed
+                            break;
+                        }
+                        Ok(n) => {
+                            // Send data to main thread
+                            if data_sender.send(buffer[..n].to_vec()).is_err() {
+                                // Channel closed, exit thread
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            // Handle I/O errors
+                            match e.kind() {
+                                std::io::ErrorKind::Interrupted => continue,
+                                std::io::ErrorKind::WouldBlock => {
+                                    thread::sleep(Duration::from_millis(10));
+                                    continue;
+                                }
+                                _ => {
+                                    eprintln!("PTY read error: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Spawn background thread for writing commands to PTY
+            thread::spawn(move || {
+                while let Ok(command) = cmd_rx.recv() {
+                    if let Err(e) = pty_writer.write_all(command.as_bytes()) {
+                        eprintln!("PTY write error: {}", e);
+                        break;
+                    }
+                    if let Err(e) = pty_writer.flush() {
+                        eprintln!("PTY flush error: {}", e);
+                        break;
+                    }
+                }
+            });
         }
         
         Ok(())
@@ -319,9 +374,12 @@ impl SshSession {
     }
 
     /// Send raw input (like key presses) to the session
-    pub fn send_input(&self, _input: &[u8]) -> Result<()> {
-        // TODO: Implement proper input forwarding to PTY
-        // For now, this is a placeholder
+    pub fn send_input(&self, input: &[u8]) -> Result<()> {
+        if let Some(sender) = &self.command_sender {
+            let input_str = String::from_utf8_lossy(input);
+            sender.send(input_str.to_string())
+                .map_err(|e| anyhow::anyhow!("Failed to send input: {}", e))?;
+        }
         Ok(())
     }
 
@@ -350,10 +408,26 @@ impl SshSession {
     }
 
     /// Check if the session process is still running
-    pub fn is_process_running(&self) -> bool {
-        // TODO: Implement proper process checking
-        // For now, just return true if we have a process
-        self.child_process.is_some()
+    pub fn is_process_running(&mut self) -> bool {
+        if let Some(child) = &mut self.child_process {
+            // Try to get exit status without blocking
+            match child.try_wait() {
+                Ok(Some(_exit_status)) => {
+                    // Process has exited
+                    false
+                }
+                Ok(None) => {
+                    // Process is still running
+                    true
+                }
+                Err(_) => {
+                    // Error checking process status, assume it's not running
+                    false
+                }
+            }
+        } else {
+            false
+        }
     }
 
     /// Update connection state based on process status
@@ -389,13 +463,17 @@ impl SshSession {
         // Kill the child process
         if let Some(child) = &mut self.child_process {
             let _ = child.kill();
+            // Wait a bit for process to exit gracefully
+            let _ = child.wait();
         }
+        
+        // Close channels first to signal background threads to exit
+        self.data_receiver = None;
+        self.command_sender = None;
         
         // Clean up resources
         self.child_process = None;
         self.pty_master = None;
-        self.data_receiver = None;
-        self.command_sender = None;
         
         self.state = ConnectionState::Disconnected;
     }

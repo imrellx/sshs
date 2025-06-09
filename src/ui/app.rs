@@ -643,10 +643,13 @@ impl App {
                 Ok(AppKeyAction::Stop)
             }
             _ => {
-                // Forward other keys to the active session
-                if let Some(_session) = self.tab_manager.get_active_session() {
-                    // TODO: Forward key input to active SSH session
-                    // For now, just ignore other keys in session mode
+                // Forward all other keys to the active session
+                if self.tab_manager.get_active_session().is_some() {
+                    // Convert key event to bytes for sending to PTY
+                    let input_bytes = self.key_event_to_bytes(key);
+                    if let Err(e) = self.tab_manager.send_input_to_active(&input_bytes) {
+                        self.set_feedback_message(format!("Failed to send input: {}", e), true);
+                    }
                 }
                 Ok(AppKeyAction::Ok)
             }
@@ -1143,6 +1146,63 @@ impl App {
         }
     }
     
+    /// Convert a key event to bytes for sending to PTY
+    fn key_event_to_bytes(&self, key: KeyEvent) -> Vec<u8> {
+        use KeyCode::*;
+        
+        match key.code {
+            Char(c) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    // Handle Ctrl combinations
+                    match c {
+                        'a'..='z' => vec![c as u8 - b'a' + 1], // Ctrl+A = 0x01, etc.
+                        '@' => vec![0],    // Ctrl+@
+                        '[' => vec![27],   // Ctrl+[ (ESC)
+                        '\\' => vec![28],  // Ctrl+\
+                        ']' => vec![29],   // Ctrl+]
+                        '^' => vec![30],   // Ctrl+^
+                        '_' => vec![31],   // Ctrl+_
+                        _ => c.to_string().into_bytes(),
+                    }
+                } else {
+                    c.to_string().into_bytes()
+                }
+            }
+            Enter => vec![b'\r'],
+            Tab => vec![b'\t'],
+            Backspace => vec![127], // DEL character
+            Delete => vec![27, 91, 51, 126], // ESC[3~
+            Up => vec![27, 91, 65],    // ESC[A
+            Down => vec![27, 91, 66],  // ESC[B
+            Right => vec![27, 91, 67], // ESC[C
+            Left => vec![27, 91, 68],  // ESC[D
+            Home => vec![27, 91, 72],  // ESC[H
+            End => vec![27, 91, 70],   // ESC[F
+            PageUp => vec![27, 91, 53, 126],   // ESC[5~
+            PageDown => vec![27, 91, 54, 126], // ESC[6~
+            F(n) => {
+                // Function keys
+                match n {
+                    1 => vec![27, 79, 80],  // ESC[OP
+                    2 => vec![27, 79, 81],  // ESC[OQ
+                    3 => vec![27, 79, 82],  // ESC[OR
+                    4 => vec![27, 79, 83],  // ESC[OS
+                    5 => vec![27, 91, 49, 53, 126], // ESC[15~
+                    6 => vec![27, 91, 49, 55, 126], // ESC[17~
+                    7 => vec![27, 91, 49, 56, 126], // ESC[18~
+                    8 => vec![27, 91, 49, 57, 126], // ESC[19~
+                    9 => vec![27, 91, 50, 48, 126], // ESC[20~
+                    10 => vec![27, 91, 50, 49, 126], // ESC[21~
+                    11 => vec![27, 91, 50, 51, 126], // ESC[23~
+                    12 => vec![27, 91, 50, 52, 126], // ESC[24~
+                    _ => Vec::new(),
+                }
+            }
+            Esc => vec![27],
+            _ => Vec::new(),
+        }
+    }
+    
     fn reload_hosts(&mut self) -> Result<()> {
         let mut hosts = Vec::new();
 
@@ -1191,11 +1251,8 @@ impl App {
     }
     
     
-    /// Create a new SSH session from a host (non-async wrapper)
+    /// Create a new SSH session from a host
     fn create_ssh_session_from_host(&mut self, host: ssh::Host) -> Result<()> {
-        // For now, create a placeholder session that will connect asynchronously
-        // This is a synchronous wrapper that starts the async connection process
-        
         // Check if we already have a session for this host
         if self.tab_manager.has_session_for_host(&host.name) {
             // Switch to existing session
@@ -1205,19 +1262,27 @@ impl App {
             return Ok(());
         }
 
-        // Create session config
-        let session_config = SessionConfig::default();
-        let _session = super::session::SshSession::new(host, session_config);
-        
-        // Use the tab manager's create_session method (but we need async for that)
-        // For now, create a simplified version that just adds a placeholder session
-        
-        // TODO: Implement proper async session creation
-        // This is a temporary implementation to get the structure working
-        
-        self.set_feedback_message("Creating session...".to_string(), false);
-        
-        Ok(())
+        // Create the SSH session using the tab manager
+        match self.tab_manager.create_session(host.clone()) {
+            Ok(tab_index) => {
+                self.set_feedback_message(
+                    format!("SSH session created for {}", host.name), 
+                    false
+                );
+                
+                // Switch to the new tab
+                self.tab_manager.goto_tab(tab_index + 1)?; // 1-based indexing
+                
+                Ok(())
+            }
+            Err(e) => {
+                self.set_feedback_message(
+                    format!("Failed to create SSH session for {}: {}", host.name, e), 
+                    true
+                );
+                Err(e)
+            }
+        }
     }
 }
 
