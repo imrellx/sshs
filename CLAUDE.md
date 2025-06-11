@@ -122,6 +122,7 @@ Before making substantial changes, ask clearly:
   - Run application: `cargo run`
   - Run tests: `cargo test`
   - Check code: `cargo check`
+- **Please obey clippy linting rules.**
 
 ## Project Structure
 ```
@@ -137,7 +138,10 @@ project/
 ---
 
 ## Repository Reference
-- This is the repository you should be committing to. Please use this repository at all times and no other repository: https://github.com/imrellx/sshs
+- **CRITICAL**: This is the ONLY repository you should EVER use: https://github.com/imrellx/sshs
+- **NEVER** use quantumsheep/sshs or any other repository
+- **ALL** commits, PRs, and operations must go to imrellx/sshs
+- The upstream remote to quantumsheep/sshs has been permanently removed
 
 ## Remember
 - Ship working code frequently

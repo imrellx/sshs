@@ -52,7 +52,11 @@ pub struct InvalidIncludeError {
 
 impl std::fmt::Display for InvalidIncludeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Invalid include directive on line '{}': {}", self.line, self.details)
+        write!(
+            f,
+            "Invalid include directive on line '{}': {}",
+            self.line, self.details
+        )
     }
 }
 
