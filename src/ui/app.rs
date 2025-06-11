@@ -474,8 +474,43 @@ impl App {
                 // Close session manager and return to normal mode
                 self.focus_state = FocusState::Normal;
             }
+            Up | Char('k') => {
+                // Navigate up in session list
+                if self.tab_manager.has_sessions() {
+                    let session_count = self.tab_manager.session_count();
+                    if self.session_manager_selection_index == 0 {
+                        // Wrap to last session
+                        self.session_manager_selection_index = session_count - 1;
+                    } else {
+                        self.session_manager_selection_index -= 1;
+                    }
+                }
+            }
+            Down | Char('j') => {
+                // Navigate down in session list
+                if self.tab_manager.has_sessions() {
+                    let session_count = self.tab_manager.session_count();
+                    if self.session_manager_selection_index >= session_count - 1 {
+                        // Wrap to first session
+                        self.session_manager_selection_index = 0;
+                    } else {
+                        self.session_manager_selection_index += 1;
+                    }
+                }
+            }
+            Enter => {
+                // Switch to selected session and close session manager
+                if self.tab_manager.has_sessions()
+                    && self.session_manager_selection_index < self.tab_manager.session_count()
+                {
+                    // Convert 0-based selection to 1-based for switch_to_session
+                    self.tab_manager
+                        .switch_to_session(self.session_manager_selection_index + 1);
+                    self.focus_state = FocusState::Normal;
+                }
+            }
             _ => {
-                // TODO: Implement session manager navigation and commands
+                // TODO: Implement other session manager commands (N, X, D, R)
                 return AppKeyAction::Continue;
             }
         }
@@ -2385,5 +2420,231 @@ mod tests {
 
         // Session status should be connected initially
         assert_eq!(session.status, SessionStatus::Connected);
+    }
+
+    #[test]
+    fn test_session_manager_navigation_up_down() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+
+        // Add multiple hosts and sessions for navigation testing
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host3".to_string(),
+                destination: "host3@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create 3 sessions
+        app.table_state.select(Some(0));
+        app.open_new_session(); // Session 0
+        app.table_state.select(Some(1));
+        app.open_new_session(); // Session 1
+        app.table_state.select(Some(2));
+        app.open_new_session(); // Session 2 (current)
+
+        // Open session manager
+        app.focus_state = FocusState::SessionManager;
+        app.session_manager_selection_index = 2; // Start at current session
+
+        // Test Down navigation (should wrap to 0)
+        let down_key = KeyEvent {
+            code: KeyCode::Down,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(down_key);
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.session_manager_selection_index, 0); // Wrapped to beginning
+
+        // Test Up navigation (should wrap to last index)
+        let up_key = KeyEvent {
+            code: KeyCode::Up,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(up_key);
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.session_manager_selection_index, 2); // Wrapped to end
+
+        // Test regular Up navigation
+        let action = app.handle_session_manager_keys(up_key);
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.session_manager_selection_index, 1); // Normal up movement
+    }
+
+    #[test]
+    fn test_session_manager_initial_selection() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+
+        // Add test hosts
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create sessions and make session 0 the current one
+        app.table_state.select(Some(0));
+        app.open_new_session(); // Session 0
+        app.table_state.select(Some(1));
+        app.open_new_session(); // Session 1
+
+        // Switch back to session 0
+        app.tab_manager.switch_to_session(1); // 1-based index
+        assert_eq!(app.tab_manager.current_session_index(), 0);
+
+        // Open session manager - should initialize to current session
+        let key = KeyEvent {
+            code: KeyCode::Char('S'),
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.on_key_press_ctrl(key);
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.focus_state, FocusState::SessionManager);
+        assert_eq!(app.session_manager_selection_index, 0); // Should match current session
+    }
+
+    #[test]
+    fn test_session_manager_enter_switches() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+
+        // Add test hosts
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create sessions
+        app.table_state.select(Some(0));
+        app.open_new_session(); // Session 0
+        app.table_state.select(Some(1));
+        app.open_new_session(); // Session 1 (current)
+
+        // Open session manager and select session 0
+        app.focus_state = FocusState::SessionManager;
+        app.session_manager_selection_index = 0; // Select first session
+
+        // Verify we're currently on session 1
+        assert_eq!(app.tab_manager.current_session_index(), 1);
+
+        // Press Enter to switch to selected session
+        let enter_key = KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(enter_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should switch to session 0 and close session manager
+        assert_eq!(app.tab_manager.current_session_index(), 0);
+        assert_eq!(app.focus_state, FocusState::Normal);
     }
 }
