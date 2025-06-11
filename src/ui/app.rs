@@ -810,10 +810,7 @@ impl App {
         let host = self.hosts[selected].clone();
         match self.tab_manager.add_session(host) {
             Ok(session_id) => {
-                self.set_feedback_message(
-                    format!("New session {} created", session_id),
-                    false,
-                );
+                self.set_feedback_message(format!("New session {} created", session_id), false);
             }
             Err(e) => {
                 self.set_feedback_message(format!("Error: {}", e), true);
@@ -1879,7 +1876,7 @@ mod tests {
         use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 
         let mut app = create_test_app();
-        
+
         // Add a host to select
         let hosts = vec![Host {
             name: "test-host".to_string(),
@@ -1907,7 +1904,7 @@ mod tests {
 
         // Test opening new session
         app.open_new_session();
-        
+
         assert!(app.tab_manager.has_sessions());
         assert_eq!(app.tab_manager.session_count(), 1);
         assert!(app.feedback_message.is_some());
@@ -1917,10 +1914,10 @@ mod tests {
     #[test]
     fn test_open_new_session_without_host() {
         let mut app = create_test_app();
-        
+
         // Try to open session without any hosts
         app.open_new_session();
-        
+
         assert!(!app.tab_manager.has_sessions());
         assert!(app.feedback_message.is_some());
         assert!(app.is_feedback_error);
@@ -1932,7 +1929,7 @@ mod tests {
         use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 
         let mut app = create_test_app();
-        
+
         // Add a host
         let hosts = vec![Host {
             name: "test-host".to_string(),
@@ -1961,7 +1958,7 @@ mod tests {
         // Test Ctrl+N key
         let key_event = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
         let action = app.on_key_press_ctrl(key_event);
-        
+
         assert_eq!(action, AppKeyAction::Ok);
         assert!(app.tab_manager.has_sessions());
     }
@@ -1972,7 +1969,7 @@ mod tests {
         use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 
         let mut app = create_test_app();
-        
+
         // Add hosts
         let hosts = vec![
             Host {
@@ -2006,22 +2003,22 @@ mod tests {
                     || matcher.fuzzy_match(&host.aliases, search_value).is_some()
             },
         );
-        
+
         // Create two sessions
         app.table_state.select(Some(0));
         app.open_new_session(); // Session 1
         app.table_state.select(Some(1));
         app.open_new_session(); // Session 2
-        
+
         assert_eq!(app.tab_manager.session_count(), 2);
         assert_eq!(app.tab_manager.current_session_index(), 1); // Should be on session 2
-        
+
         // Test Ctrl+1 switches to first session
         let key_event = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL);
         let action = app.on_key_press_ctrl(key_event);
         assert_eq!(action, AppKeyAction::Ok);
         assert_eq!(app.tab_manager.current_session_index(), 0);
-        
+
         // Test Ctrl+2 switches to second session
         let key_event = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::CONTROL);
         let action = app.on_key_press_ctrl(key_event);
@@ -2035,7 +2032,7 @@ mod tests {
         use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 
         let mut app = create_test_app();
-        
+
         // Add hosts
         let hosts = vec![
             Host {
@@ -2069,15 +2066,15 @@ mod tests {
                     || matcher.fuzzy_match(&host.aliases, search_value).is_some()
             },
         );
-        
+
         // Create maximum sessions
         app.table_state.select(Some(0));
         for _ in 0..3 {
             app.open_new_session();
         }
-        
+
         assert_eq!(app.tab_manager.session_count(), 3);
-        
+
         // Try to create one more - should fail
         app.open_new_session();
         assert_eq!(app.tab_manager.session_count(), 3); // Should still be 3

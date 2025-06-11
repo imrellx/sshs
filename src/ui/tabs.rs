@@ -1,6 +1,6 @@
+use crate::ssh::Host;
 use anyhow::Result;
 use std::process::Child;
-use crate::ssh::Host;
 
 /// Maximum number of concurrent sessions for MVP
 pub const MAX_SESSIONS: usize = 3;
@@ -161,14 +161,14 @@ mod tests {
     fn test_add_first_session() {
         let mut manager = TabManager::new();
         let host = create_test_host("prod-web");
-        
+
         let session_id = manager.add_session(host).unwrap();
-        
+
         assert_eq!(session_id, 1);
         assert!(manager.has_sessions());
         assert_eq!(manager.session_count(), 1);
         assert_eq!(manager.current_session_index(), 0);
-        
+
         let current = manager.current_session().unwrap();
         assert_eq!(current.id, 1);
         assert_eq!(current.host.name, "prod-web");
@@ -177,15 +177,15 @@ mod tests {
     #[test]
     fn test_add_multiple_sessions() {
         let mut manager = TabManager::new();
-        
+
         let _id1 = manager.add_session(create_test_host("host1")).unwrap();
         let _id2 = manager.add_session(create_test_host("host2")).unwrap();
         let id3 = manager.add_session(create_test_host("host3")).unwrap();
-        
+
         assert_eq!(manager.session_count(), 3);
         assert_eq!(id3, 3);
         assert_eq!(manager.current_session_index(), 2); // Should be on the last added
-        
+
         let current = manager.current_session().unwrap();
         assert_eq!(current.host.name, "host3");
     }
@@ -193,15 +193,15 @@ mod tests {
     #[test]
     fn test_maximum_sessions_limit() {
         let mut manager = TabManager::new();
-        
+
         // Add maximum sessions
         for i in 1..=MAX_SESSIONS {
             let host = create_test_host(&format!("host{}", i));
             manager.add_session(host).unwrap();
         }
-        
+
         assert_eq!(manager.session_count(), MAX_SESSIONS);
-        
+
         // Try to add one more - should fail
         let result = manager.add_session(create_test_host("extra"));
         assert!(result.is_err());
@@ -211,19 +211,19 @@ mod tests {
     #[test]
     fn test_switch_to_session_valid_indices() {
         let mut manager = TabManager::new();
-        
+
         manager.add_session(create_test_host("host1")).unwrap();
         manager.add_session(create_test_host("host2")).unwrap();
         manager.add_session(create_test_host("host3")).unwrap();
-        
+
         // Should start on session 3 (last added)
         assert_eq!(manager.current_session_index(), 2);
-        
+
         // Switch to session 1 (Ctrl+1)
         assert!(manager.switch_to_session(1));
         assert_eq!(manager.current_session_index(), 0);
         assert_eq!(manager.current_session().unwrap().host.name, "host1");
-        
+
         // Switch to session 2 (Ctrl+2)
         assert!(manager.switch_to_session(2));
         assert_eq!(manager.current_session_index(), 1);
@@ -234,12 +234,12 @@ mod tests {
     fn test_switch_to_session_invalid_indices() {
         let mut manager = TabManager::new();
         manager.add_session(create_test_host("host1")).unwrap();
-        
+
         // Test invalid indices
         assert!(!manager.switch_to_session(0)); // 0 is invalid (1-based)
         assert!(!manager.switch_to_session(2)); // Only 1 session exists
         assert!(!manager.switch_to_session(99)); // Way out of range
-        
+
         // Should still be on the original session
         assert_eq!(manager.current_session_index(), 0);
     }
@@ -248,7 +248,7 @@ mod tests {
     fn test_session_tab_display_name() {
         let host = create_test_host("prod-web");
         let session = Session::new(1, host);
-        
+
         assert_eq!(session.tab_display_name(), "[1:prod-web]");
     }
 
@@ -256,7 +256,7 @@ mod tests {
     fn test_tab_bar_display_single_session() {
         let mut manager = TabManager::new();
         manager.add_session(create_test_host("prod-web")).unwrap();
-        
+
         let display = manager.tab_bar_display();
         assert_eq!(display, "▶[1:prod-web]");
     }
@@ -267,11 +267,11 @@ mod tests {
         manager.add_session(create_test_host("host1")).unwrap();
         manager.add_session(create_test_host("host2")).unwrap();
         manager.add_session(create_test_host("host3")).unwrap();
-        
+
         // Should highlight the last session (current)
         let display = manager.tab_bar_display();
         assert_eq!(display, "[1:host1][2:host2]▶[3:host3]");
-        
+
         // Switch to first session and check display
         manager.switch_to_session(1);
         let display = manager.tab_bar_display();
