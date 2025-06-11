@@ -532,7 +532,7 @@ impl App {
                         .name
                         .clone();
                     self.set_feedback_message(
-                        format!("Disconnected session '{}'", session_name),
+                        format!("Disconnected session '{session_name}'"),
                         false,
                     );
                 }
@@ -569,7 +569,7 @@ impl App {
                         .close_session(self.session_manager_selection_index)
                     {
                         self.set_feedback_message(
-                            format!("Closed session '{}'", session_name),
+                            format!("Closed session '{session_name}'"),
                             false,
                         );
 
@@ -621,7 +621,7 @@ impl App {
                             .rename_session(session_index, new_name.clone())
                     {
                         self.set_feedback_message(
-                            format!("Renamed session to '{}'", new_name),
+                            format!("Renamed session to '{new_name}'"),
                             false,
                         );
                     }
@@ -647,7 +647,7 @@ impl App {
 
         match key.code {
             Char('c') => AppKeyAction::Stop,
-            Char('s') | Char('S') => {
+            Char('s' | 'S') => {
                 // Ctrl+Shift+S to open session manager (only from Normal mode)
                 if key.modifiers.contains(KeyModifiers::SHIFT)
                     && self.focus_state == FocusState::Normal
