@@ -1,7 +1,7 @@
 # SSHS Development TODO - Issue #13 Continuation
 
 ## Current Task: Issue #13 - Enhanced Tab Features
-**Status**: Phase 2 Complete - Activity Indicators Implemented  
+**Status**: Phase 2 Complete - Activity Indicators Implemented
 **Started**: December 11, 2025
 
 ## Progress Tracker
@@ -23,7 +23,7 @@
 
 ### Phase 1: Remove Session Limits (TDD Implementation)
 **Goal**: Increase session limit from 3 to reasonable number (20)
-**Scope**: 
+**Scope**:
 - Update `MAX_SESSIONS` constant
 - Handle tab overflow in UI rendering
 - Update tests for new limits
@@ -31,7 +31,7 @@
 
 **Technical Tasks**:
 1. Update `MAX_SESSIONS` from 3 to 20
-2. Modify tab display for overflow scenarios  
+2. Modify tab display for overflow scenarios
 3. Update existing tests
 4. Add new tests for many sessions
 5. Implement tab overflow UI
@@ -40,7 +40,7 @@
 **Goal**: Add visual status indicators to tabs
 **Scope**:
 - `*` for new output/activity
-- `!` for errors/disconnections  
+- `!` for errors/disconnections
 - `@` for background processes
 - Status colors (Green/Yellow/Red)
 
@@ -54,7 +54,7 @@
 ## Implementation Order (TDD)
 1. Remove session limit + overflow tests
 2. Add activity indicator infrastructure + tests
-3. Implement session manager UI + tests  
+3. Implement session manager UI + tests
 4. Integration testing and refinement
 
 ## Notes

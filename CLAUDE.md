@@ -6,7 +6,7 @@ Core development standards and practices. This file should exist in every projec
 
 ## Quick Reference
 - **Ask Permission**: Before major refactoring or architectural changes
-- **TDD Default**: Tests first, except when refactoring well-tested code  
+- **TDD Default**: Tests first, except when refactoring well-tested code
 - **Production Ready**: Include error handling, logging, monitoring
 - **Security First**: Never hardcode secrets, validate inputs
 - **Match Style**: Follow existing patterns in the codebase

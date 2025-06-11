@@ -152,7 +152,7 @@ impl App {
 
         // Ensure we always restore the terminal state
         let restore_result = safe_restore_terminal(&terminal);
-        
+
         // Handle any errors from the application run
         if let Err(err) = res {
             eprintln!("Application error: {}", err);
@@ -426,19 +426,19 @@ where
 
     // Now set up the terminal properly
     enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {}", e))?;
-    
+
     // Set up terminal features one by one to better identify issues
     let mut terminal_ref = terminal.borrow_mut();
-    
+
     execute!(terminal_ref.backend_mut(), Hide)
         .map_err(|e| anyhow::anyhow!("Failed to hide cursor: {}", e))?;
-    
+
     execute!(terminal_ref.backend_mut(), EnterAlternateScreen)
         .map_err(|e| anyhow::anyhow!("Failed to enter alternate screen: {}", e))?;
-    
+
     execute!(terminal_ref.backend_mut(), EnableMouseCapture)
         .map_err(|e| anyhow::anyhow!("Failed to enable mouse capture: {}", e))?;
-    
+
     Ok(())
 }
 
@@ -448,37 +448,37 @@ where
 {
     // Gather errors rather than failing on the first one
     let mut errors = Vec::new();
-    
+
     // Try to clear terminal
     if let Err(e) = terminal.borrow_mut().clear() {
         errors.push(format!("Failed to clear terminal: {}", e));
     }
-    
+
     // Try to disable raw mode - very important to restore
     if let Err(e) = disable_raw_mode() {
         errors.push(format!("Failed to disable raw mode: {}", e));
     }
-    
+
     // Try to restore terminal state
     {
         let mut terminal_ref = terminal.borrow_mut();
-        
+
         // Show cursor
         if let Err(e) = execute!(terminal_ref.backend_mut(), Show) {
             errors.push(format!("Failed to show cursor: {}", e));
         }
-        
+
         // Leave alternate screen
         if let Err(e) = execute!(terminal_ref.backend_mut(), LeaveAlternateScreen) {
             errors.push(format!("Failed to leave alternate screen: {}", e));
         }
-        
+
         // Disable mouse capture
         if let Err(e) = execute!(terminal_ref.backend_mut(), DisableMouseCapture) {
             errors.push(format!("Failed to disable mouse capture: {}", e));
         }
     }
-    
+
     if errors.is_empty() {
         Ok(())
     } else {

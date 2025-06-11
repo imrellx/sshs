@@ -63,7 +63,7 @@ impl Session {
     #[must_use]
     pub fn tab_display_name(&self) -> String {
         let mut indicators = String::new();
-        
+
         // Add activity indicators
         if self.activity.has_new_output {
             indicators.push('*');
@@ -74,7 +74,7 @@ impl Session {
         if self.activity.has_background_activity {
             indicators.push('@');
         }
-        
+
         if indicators.is_empty() {
             format!("[{}:{}]", self.id, self.host.name)
         } else {
@@ -87,31 +87,31 @@ impl Session {
     pub fn is_connected(&self) -> bool {
         self.ssh_process.is_some()
     }
-    
+
     /// Mark session as having new output
     pub fn mark_new_output(&mut self) {
         self.activity.has_new_output = true;
         self.last_activity = Some(Instant::now());
     }
-    
+
     /// Mark session as having an error
     pub fn mark_error(&mut self) {
         self.activity.has_error = true;
         self.status = SessionStatus::Disconnected;
     }
-    
+
     /// Mark session as having background activity
     pub fn mark_background_activity(&mut self) {
         self.activity.has_background_activity = true;
         self.last_activity = Some(Instant::now());
     }
-    
+
     /// Clear activity indicators (called when tab becomes active)
     pub fn clear_activity_indicators(&mut self) {
         self.activity.has_new_output = false;
         // Note: Keep error and background activity until manually cleared
     }
-    
+
     /// Clear error indicator
     pub fn clear_error(&mut self) {
         self.activity.has_error = false;
@@ -221,7 +221,7 @@ impl TabManager {
             })
             .collect::<String>()
     }
-    
+
     /// Mark activity on a specific session
     pub fn mark_session_activity(&mut self, session_index: usize, activity_type: &str) {
         if let Some(session) = self.sessions.get_mut(session_index) {
@@ -233,7 +233,7 @@ impl TabManager {
             }
         }
     }
-    
+
     /// Switch to session and clear its activity indicators
     pub fn switch_to_session_and_clear_activity(&mut self, one_based_index: usize) -> bool {
         if self.switch_to_session(one_based_index) {
@@ -456,16 +456,20 @@ mod tests {
 
         // Test that tab bar display includes all sessions
         let display = manager.tab_bar_display();
-        
+
         // Should contain all 15 tabs
         for i in 1..=15 {
-            assert!(display.contains(&format!("[{i}:host{i}]")), 
-                "Display should contain tab {i}: {display}");
+            assert!(
+                display.contains(&format!("[{i}:host{i}]")),
+                "Display should contain tab {i}: {display}"
+            );
         }
-        
+
         // Should highlight the last session (current)
-        assert!(display.contains("▶[15:host15]"), 
-            "Should highlight current tab: {display}");
+        assert!(
+            display.contains("▶[15:host15]"),
+            "Should highlight current tab: {display}"
+        );
     }
 
     #[test]
@@ -479,22 +483,22 @@ mod tests {
     fn test_activity_indicators_basic() {
         let host = create_test_host("test");
         let mut session = Session::new(1, host);
-        
+
         // Initially no indicators
         assert_eq!(session.tab_display_name(), "[1:test]");
         assert_eq!(session.status, SessionStatus::Connected);
-        
+
         // Mark new output
         session.mark_new_output();
         assert_eq!(session.tab_display_name(), "[1:test*]");
         assert!(session.activity.has_new_output);
-        
+
         // Mark error
         session.mark_error();
         assert_eq!(session.tab_display_name(), "[1:test*!]");
         assert!(session.activity.has_error);
         assert_eq!(session.status, SessionStatus::Disconnected);
-        
+
         // Mark background activity
         session.mark_background_activity();
         assert_eq!(session.tab_display_name(), "[1:test*!@]");
@@ -505,20 +509,20 @@ mod tests {
     fn test_clear_activity_indicators() {
         let host = create_test_host("test");
         let mut session = Session::new(1, host);
-        
+
         // Set all activity indicators
         session.mark_new_output();
         session.mark_error();
         session.mark_background_activity();
         assert_eq!(session.tab_display_name(), "[1:test*!@]");
-        
+
         // Clear activity indicators (only clears new output)
         session.clear_activity_indicators();
         assert_eq!(session.tab_display_name(), "[1:test!@]");
         assert!(!session.activity.has_new_output);
         assert!(session.activity.has_error);
         assert!(session.activity.has_background_activity);
-        
+
         // Clear error manually
         session.clear_error();
         assert_eq!(session.tab_display_name(), "[1:test@]");
@@ -528,17 +532,17 @@ mod tests {
     #[test]
     fn test_tab_manager_activity_marking() {
         let mut manager = TabManager::new();
-        
+
         // Add two sessions
         manager.add_session(create_test_host("host1")).unwrap();
         manager.add_session(create_test_host("host2")).unwrap();
-        
+
         // Mark activity on first session
         manager.mark_session_activity(0, "output");
         let display = manager.tab_bar_display();
         assert!(display.contains("[1:host1*]"));
         assert!(display.contains("[2:host2]"));
-        
+
         // Mark error on second session
         manager.mark_session_activity(1, "error");
         let display = manager.tab_bar_display();
@@ -549,15 +553,15 @@ mod tests {
     #[test]
     fn test_switch_and_clear_activity() {
         let mut manager = TabManager::new();
-        
+
         // Add sessions
         manager.add_session(create_test_host("host1")).unwrap();
         manager.add_session(create_test_host("host2")).unwrap();
-        
+
         // Mark activity on first session and switch to it
         manager.mark_session_activity(0, "output");
         assert!(manager.switch_to_session_and_clear_activity(1));
-        
+
         // Activity should be cleared on first session (now current)
         let display = manager.tab_bar_display();
         assert!(display.contains("▶[1:host1]")); // No * indicator

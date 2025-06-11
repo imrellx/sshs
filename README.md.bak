@@ -4,7 +4,7 @@
     <img src="https://repology.org/badge/vertical-allrepos/sshs.svg" alt="Packaging status" align="right">
 </a>
 
-Terminal user interface for SSH.  
+Terminal user interface for SSH.
 It uses `~/.ssh/config` to list and connect to hosts.
 
 <br>

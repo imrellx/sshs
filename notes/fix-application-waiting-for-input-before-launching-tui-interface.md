@@ -8,11 +8,11 @@
 The application currently waits for user input (Enter key press) before launching the TUI interface when running `cargo run`. This creates a poor user experience as the application appears to hang or be unresponsive.
 
 ### Current Behavior
-- `cargo run` compliles successfully 
+- `cargo run` compliles successfully
 - Application waits for Enter key press before TUI launches
 - User must manually press Enter to proceed
 
-### Expected Behavior  
+### Expected Behavior
 - `cargo run` should launch TUI immediately after compilation
 - No user interaction required for initial launch
 - All existing functionality preserved once TUI is active
@@ -22,7 +22,7 @@ Based on the issue description, the problem appears to be in `src/ui/app.rs` in 
 
 ```rust
 crossterm::event::read()
-    .ok() // Prepare the event system, ignore initial read result  
+    .ok() // Prepare the event system, ignore initial read result
     .and_then(|_| None::<crossterm::event::Event>); // Return None to continue
 ```
 
@@ -56,7 +56,7 @@ crossterm::event::read()
 - All other event handling is non-blocking and works correctly
 - Terminal setup/teardown functions work properly
 
-**Signal Handling**: 
+**Signal Handling**:
 - The comment mentions "simple signal handler for Ctrl+C using crossterm only"
 - However, Ctrl+C is handled properly in the main event loop (line 474)
 - This blocking read is **not needed** for signal handling
@@ -100,7 +100,7 @@ The solution directly addresses the root cause without introducing complexity or
 
 The pull request has been successfully created with:
 - ✅ Detailed problem description and solution explanation
-- ✅ Comprehensive testing checklist 
+- ✅ Comprehensive testing checklist
 - ✅ Reference to issue #10
 - ✅ Test plan for reviewers
 

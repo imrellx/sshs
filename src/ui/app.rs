@@ -47,6 +47,8 @@ pub enum FocusState {
     Normal,
     /// Search mode - focus on search field for typing
     Search,
+    /// Session manager overlay - manage all active sessions
+    SessionManager,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +96,9 @@ pub struct App {
 
     // Tab management
     pub tab_manager: TabManager,
+
+    // Session manager overlay
+    pub session_manager_selection_index: usize,
 }
 
 #[derive(PartialEq, Debug)]
@@ -176,6 +181,7 @@ impl App {
             pending_g: false,
 
             tab_manager: TabManager::new(),
+            session_manager_selection_index: 0,
         };
         app.calculate_table_columns_constraints();
 
@@ -325,6 +331,7 @@ impl App {
         match self.focus_state {
             FocusState::Normal => self.handle_normal_mode_keys(terminal, key),
             FocusState::Search => Ok(self.handle_search_mode_keys(key)),
+            FocusState::SessionManager => Ok(self.handle_session_manager_keys(key)),
         }
     }
 
@@ -458,12 +465,46 @@ impl App {
         AppKeyAction::Ok
     }
 
+    fn handle_session_manager_keys(&mut self, key: KeyEvent) -> AppKeyAction {
+        #[allow(clippy::enum_glob_use)]
+        use KeyCode::*;
+
+        match key.code {
+            Esc | Char('q') => {
+                // Close session manager and return to normal mode
+                self.focus_state = FocusState::Normal;
+            }
+            _ => {
+                // TODO: Implement session manager navigation and commands
+                return AppKeyAction::Continue;
+            }
+        }
+
+        AppKeyAction::Ok
+    }
+
     fn on_key_press_ctrl(&mut self, key: KeyEvent) -> AppKeyAction {
         #[allow(clippy::enum_glob_use)]
         use KeyCode::*;
 
         match key.code {
             Char('c') => AppKeyAction::Stop,
+            Char('s') | Char('S') => {
+                // Ctrl+Shift+S to open session manager (only from Normal mode)
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    && self.focus_state == FocusState::Normal
+                {
+                    self.focus_state = FocusState::SessionManager;
+                    // Initialize selection to current session
+                    if self.tab_manager.has_sessions() {
+                        self.session_manager_selection_index =
+                            self.tab_manager.current_session_index();
+                    } else {
+                        self.session_manager_selection_index = 0;
+                    }
+                }
+                AppKeyAction::Ok
+            }
             Char('j') => {
                 self.next();
                 AppKeyAction::Ok
@@ -1410,6 +1451,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::tabs::SessionStatus;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
 
@@ -1446,6 +1488,7 @@ mod tests {
             last_key_time: None,
             pending_g: false,
             tab_manager: TabManager::new(),
+            session_manager_selection_index: 0,
         }
     }
 
@@ -2080,5 +2123,267 @@ mod tests {
         assert_eq!(app.tab_manager.session_count(), 20); // Should still be 20
         assert!(app.feedback_message.is_some());
         assert!(app.is_feedback_error); // Should show error message
+    }
+
+    #[test]
+    fn test_session_manager_toggle() {
+        let mut app = create_test_app();
+
+        // Should start in Normal mode
+        assert_eq!(app.focus_state, FocusState::Normal);
+
+        // Ctrl+Shift+S should open session manager
+        let key = KeyEvent {
+            code: KeyCode::Char('S'),
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.on_key_press_ctrl(key);
+
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.focus_state, FocusState::SessionManager);
+        assert_eq!(app.session_manager_selection_index, 0); // No sessions initially
+    }
+
+    #[test]
+    fn test_session_manager_escape_closes() {
+        let mut app = create_test_app();
+
+        // Open session manager first
+        app.focus_state = FocusState::SessionManager;
+
+        // Escape should close session manager
+        let key = KeyEvent {
+            code: KeyCode::Esc,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(key);
+
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.focus_state, FocusState::Normal);
+    }
+
+    #[test]
+    fn test_session_manager_only_in_normal_mode() {
+        let mut app = create_test_app();
+
+        // Set to Search mode
+        app.focus_state = FocusState::Search;
+
+        // Ctrl+Shift+S should NOT open session manager from Search mode
+        let key = KeyEvent {
+            code: KeyCode::Char('S'),
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.on_key_press_ctrl(key);
+
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.focus_state, FocusState::Search); // Should remain in Search mode
+    }
+
+    #[test]
+    fn test_session_manager_empty_display() {
+        let mut app = create_test_app();
+
+        // No sessions initially
+        assert!(!app.tab_manager.has_sessions());
+
+        // Open session manager
+        app.focus_state = FocusState::SessionManager;
+
+        // Selection index should be 0 when no sessions
+        assert_eq!(app.session_manager_selection_index, 0);
+
+        // Session count should be 0
+        assert_eq!(app.tab_manager.session_count(), 0);
+    }
+
+    #[test]
+    fn test_session_manager_single_session() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+
+        // Add a test host first
+        let hosts = vec![Host {
+            name: "test-host".to_string(),
+            destination: "test@localhost".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        }];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+        app.table_state.select(Some(0)); // Select the host
+
+        // Add one session
+        app.open_new_session();
+
+        assert!(app.tab_manager.has_sessions());
+        assert_eq!(app.tab_manager.session_count(), 1);
+
+        // Open session manager
+        app.focus_state = FocusState::SessionManager;
+
+        // Should initialize selection to current session (0-based)
+        if app.tab_manager.has_sessions() {
+            app.session_manager_selection_index = app.tab_manager.current_session_index();
+        }
+
+        assert_eq!(app.session_manager_selection_index, 0);
+
+        // Check session information
+        let sessions = app.tab_manager.sessions();
+        assert_eq!(sessions.len(), 1);
+        assert!(!sessions[0].tab_display_name().is_empty());
+    }
+
+    #[test]
+    fn test_session_manager_multiple_sessions() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+
+        // Add test hosts
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host3".to_string(),
+                destination: "host3@localhost".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Add multiple sessions
+        app.table_state.select(Some(0));
+        app.open_new_session(); // Session 0
+        app.table_state.select(Some(1));
+        app.open_new_session(); // Session 1 (current)
+        app.table_state.select(Some(2));
+        app.open_new_session(); // Session 2 (current)
+
+        assert_eq!(app.tab_manager.session_count(), 3);
+        assert_eq!(app.tab_manager.current_session_index(), 2); // Last added session
+
+        // Open session manager
+        app.focus_state = FocusState::SessionManager;
+
+        // Should initialize selection to current session
+        app.session_manager_selection_index = app.tab_manager.current_session_index();
+        assert_eq!(app.session_manager_selection_index, 2);
+
+        // Check all sessions are available
+        let sessions = app.tab_manager.sessions();
+        assert_eq!(sessions.len(), 3);
+
+        // Each session should have a display name
+        for (i, session) in sessions.iter().enumerate() {
+            assert!(!session.tab_display_name().is_empty());
+            assert_eq!(session.id, i + 1); // Session IDs start from 1
+        }
+    }
+
+    #[test]
+    fn test_session_manager_activity_indicators() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+
+        // Add a test host
+        let hosts = vec![Host {
+            name: "test-host".to_string(),
+            destination: "test@localhost".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        }];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+        app.table_state.select(Some(0));
+
+        // Add session
+        app.open_new_session();
+
+        // Get session and set activity indicators
+        let sessions = app.tab_manager.sessions();
+        assert_eq!(sessions.len(), 1);
+
+        // Test that session has initial activity indicators
+        let session = &sessions[0];
+        assert!(!session.activity.has_new_output);
+        assert!(!session.activity.has_error);
+        assert!(!session.activity.has_background_activity);
+
+        // Session status should be connected initially
+        assert_eq!(session.status, SessionStatus::Connected);
     }
 }

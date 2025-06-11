@@ -563,6 +563,11 @@ pub fn render_footer_with_mode(f: &mut Frame, app: &mut App, area: Rect) {
             let shortcuts = "(type to search) | (enter) keep filter | (esc) clear & exit | (Ctrl+F) also opens search";
             (mode, shortcuts)
         }
+        crate::ui::app::FocusState::SessionManager => {
+            let mode = "-- SESSION MANAGER --";
+            let shortcuts = "(↑/↓) navigate | (enter) switch | (n) new | (x) close | (d) disconnect | (q/esc) quit";
+            (mode, shortcuts)
+        }
     };
 
     // Create the footer text with mode indicator and shortcuts
@@ -645,6 +650,7 @@ mod tests {
             last_key_time: None,
             pending_g: false,
             tab_manager: TabManager::new(),
+            session_manager_selection_index: 0,
         }
     }
 
