@@ -26,6 +26,7 @@ use tui_input::Input;
 use unicode_width::UnicodeWidthStr;
 
 use super::form::{AddHostForm, FormState};
+use super::tabs::TabManager;
 use crate::{searchable::Searchable, ssh};
 
 // UI Constants
@@ -90,6 +91,9 @@ pub struct App {
     pub focus_state: FocusState,
     pub last_key_time: Option<Instant>,
     pub pending_g: bool, // For detecting "gg" sequence
+
+    // Tab management
+    pub tab_manager: TabManager,
 }
 
 #[derive(PartialEq, Debug)]
@@ -170,6 +174,8 @@ impl App {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
+
+            tab_manager: TabManager::new(),
         };
         app.calculate_table_columns_constraints();
 
@@ -473,6 +479,26 @@ impl App {
                 self.previous();
                 AppKeyAction::Ok
             }
+            Char('n') => {
+                // Ctrl+N to open new tab/session
+                self.open_new_session();
+                AppKeyAction::Ok
+            }
+            Char('1') => {
+                // Ctrl+1 to switch to first tab
+                self.tab_manager.switch_to_session(1);
+                AppKeyAction::Ok
+            }
+            Char('2') => {
+                // Ctrl+2 to switch to second tab
+                self.tab_manager.switch_to_session(2);
+                AppKeyAction::Ok
+            }
+            Char('3') => {
+                // Ctrl+3 to switch to third tab
+                self.tab_manager.switch_to_session(3);
+                AppKeyAction::Ok
+            }
             _ => AppKeyAction::Continue,
         }
     }
@@ -771,6 +797,28 @@ impl App {
         self.feedback_timeout = None;
         self.is_edit_mode = false;
         self.editing_host_index = None;
+    }
+
+    fn open_new_session(&mut self) {
+        // For MVP, Ctrl+N creates a new session with the currently selected host
+        let selected = self.table_state.selected().unwrap_or(0);
+        if selected >= self.hosts.len() {
+            self.set_feedback_message("No host selected for new session".to_string(), true);
+            return;
+        }
+
+        let host = self.hosts[selected].clone();
+        match self.tab_manager.add_session(host) {
+            Ok(session_id) => {
+                self.set_feedback_message(
+                    format!("New session {} created", session_id),
+                    false,
+                );
+            }
+            Err(e) => {
+                self.set_feedback_message(format!("Error: {}", e), true);
+            }
+        }
     }
 
     fn open_edit_host_form(&mut self) {
@@ -1400,6 +1448,7 @@ mod tests {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
+            tab_manager: TabManager::new(),
         }
     }
 
@@ -1815,5 +1864,224 @@ mod tests {
         assert!(app.add_host_form.is_some());
         assert!(app.is_edit_mode);
         assert_eq!(app.editing_host_index, Some(0));
+    }
+
+    #[test]
+    fn test_tab_manager_initialization() {
+        let app = create_test_app();
+        assert!(!app.tab_manager.has_sessions());
+        assert_eq!(app.tab_manager.session_count(), 0);
+    }
+
+    #[test]
+    fn test_open_new_session_with_host() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        
+        // Add a host to select
+        let hosts = vec![Host {
+            name: "test-host".to_string(),
+            destination: "test.com".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        }];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+        app.table_state.select(Some(0));
+
+        // Test opening new session
+        app.open_new_session();
+        
+        assert!(app.tab_manager.has_sessions());
+        assert_eq!(app.tab_manager.session_count(), 1);
+        assert!(app.feedback_message.is_some());
+        assert!(!app.is_feedback_error);
+    }
+
+    #[test]
+    fn test_open_new_session_without_host() {
+        let mut app = create_test_app();
+        
+        // Try to open session without any hosts
+        app.open_new_session();
+        
+        assert!(!app.tab_manager.has_sessions());
+        assert!(app.feedback_message.is_some());
+        assert!(app.is_feedback_error);
+    }
+
+    #[test]
+    fn test_ctrl_n_key_handling() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        
+        // Add a host
+        let hosts = vec![Host {
+            name: "test-host".to_string(),
+            destination: "test.com".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        }];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+        app.table_state.select(Some(0));
+
+        // Test Ctrl+N key
+        let key_event = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+        let action = app.on_key_press_ctrl(key_event);
+        
+        assert_eq!(action, AppKeyAction::Ok);
+        assert!(app.tab_manager.has_sessions());
+    }
+
+    #[test]
+    fn test_ctrl_number_key_switching() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        
+        // Add hosts
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+        
+        // Create two sessions
+        app.table_state.select(Some(0));
+        app.open_new_session(); // Session 1
+        app.table_state.select(Some(1));
+        app.open_new_session(); // Session 2
+        
+        assert_eq!(app.tab_manager.session_count(), 2);
+        assert_eq!(app.tab_manager.current_session_index(), 1); // Should be on session 2
+        
+        // Test Ctrl+1 switches to first session
+        let key_event = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL);
+        let action = app.on_key_press_ctrl(key_event);
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.tab_manager.current_session_index(), 0);
+        
+        // Test Ctrl+2 switches to second session
+        let key_event = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::CONTROL);
+        let action = app.on_key_press_ctrl(key_event);
+        assert_eq!(action, AppKeyAction::Ok);
+        assert_eq!(app.tab_manager.current_session_index(), 1);
+    }
+
+    #[test]
+    fn test_maximum_sessions_enforcement() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        
+        // Add hosts
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+        
+        // Create maximum sessions
+        app.table_state.select(Some(0));
+        for _ in 0..3 {
+            app.open_new_session();
+        }
+        
+        assert_eq!(app.tab_manager.session_count(), 3);
+        
+        // Try to create one more - should fail
+        app.open_new_session();
+        assert_eq!(app.tab_manager.session_count(), 3); // Should still be 3
+        assert!(app.feedback_message.is_some());
+        assert!(app.is_feedback_error); // Should show error message
     }
 }

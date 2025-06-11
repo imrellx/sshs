@@ -12,6 +12,7 @@ use super::app::{
     TABLE_MIN_HEIGHT,
 };
 use super::form::FormState;
+use super::tabs::TabManager;
 
 /// Render the UI
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -561,6 +562,7 @@ mod tests {
             focus_state: FocusState::Normal,
             last_key_time: None,
             pending_g: false,
+            tab_manager: TabManager::new(),
         }
     }
 
