@@ -25,16 +25,35 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
 /// Render the main UI
 fn render_main_ui(f: &mut Frame, app: &mut App) {
-    let rects = Layout::vertical([
-        Constraint::Length(SEARCH_BAR_HEIGHT),
-        Constraint::Min(TABLE_MIN_HEIGHT),
-        Constraint::Length(FOOTER_HEIGHT),
-    ])
-    .split(f.area());
+    // Create layout based on whether tabs exist
+    let rects = if app.tab_manager.has_sessions() {
+        Layout::vertical([
+            Constraint::Length(1), // Tab bar
+            Constraint::Length(SEARCH_BAR_HEIGHT),
+            Constraint::Min(TABLE_MIN_HEIGHT),
+            Constraint::Length(FOOTER_HEIGHT),
+        ])
+        .split(f.area())
+    } else {
+        Layout::vertical([
+            Constraint::Length(SEARCH_BAR_HEIGHT),
+            Constraint::Min(TABLE_MIN_HEIGHT),
+            Constraint::Length(FOOTER_HEIGHT),
+        ])
+        .split(f.area())
+    };
 
-    render_searchbar(f, app, rects[0]);
-    render_table(f, app, rects[1]);
-    render_footer_with_mode(f, app, rects[2]);
+    let mut rect_index = 0;
+    
+    // Render tab bar if sessions exist
+    if app.tab_manager.has_sessions() {
+        render_tab_bar(f, app, rects[rect_index]);
+        rect_index += 1;
+    }
+    
+    render_searchbar(f, app, rects[rect_index]);
+    render_table(f, app, rects[rect_index + 1]);
+    render_footer_with_mode(f, app, rects[rect_index + 2]);
 
     // Show feedback message if present
     if let Some(message) = &app.feedback_message {
@@ -401,6 +420,55 @@ fn render_feedback(f: &mut Frame, message: &str, is_error: bool) {
     f.render_widget(message_paragraph, message_area);
 }
 
+/// Render the tab bar
+pub fn render_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
+    if !app.tab_manager.has_sessions() {
+        return;
+    }
+
+    let sessions = app.tab_manager.sessions();
+    let current_index = app.tab_manager.current_session_index();
+    
+    // Create tab spans
+    let mut tab_spans = Vec::new();
+    
+    for (index, session) in sessions.iter().enumerate() {
+        let tab_text = session.tab_display_name();
+        
+        if index == current_index {
+            // Current tab - highlighted
+            tab_spans.push(Span::styled(
+                format!("▶{}", tab_text),
+                Style::default()
+                    .fg(Color::White)
+                    .bg(app.palette.c600)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            // Inactive tab
+            tab_spans.push(Span::styled(
+                tab_text,
+                Style::default()
+                    .fg(app.palette.c400)
+                    .bg(app.palette.c950),
+            ));
+        }
+    }
+    
+    // Add instructions for new users
+    if app.tab_manager.session_count() < 3 {
+        tab_spans.push(Span::styled(
+            " | Ctrl+N: New | Ctrl+1/2/3: Switch",
+            Style::default().fg(app.palette.c300),
+        ));
+    }
+    
+    let tab_line = Line::from(tab_spans);
+    let tab_paragraph = Paragraph::new(tab_line);
+    
+    f.render_widget(tab_paragraph, area);
+}
+
 /// Render the search bar
 pub fn render_searchbar(f: &mut Frame, app: &mut App, area: Rect) {
     // Use different styling based on focus state
@@ -729,5 +797,83 @@ mod tests {
             .collect::<String>();
         
         content.contains(text)
+    }
+
+    #[test]
+    fn test_tab_bar_rendering() {
+        use crate::ssh::Host;
+        
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        
+        let mut app = create_test_app();
+        
+        // Add some sessions
+        let host1 = Host {
+            name: "prod-web".to_string(),
+            destination: "prod-web.com".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        };
+        let host2 = Host {
+            name: "dev-db".to_string(),
+            destination: "dev-db.com".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        };
+        
+        app.tab_manager.add_session(host1).unwrap();
+        app.tab_manager.add_session(host2).unwrap();
+        
+        // Switch to first tab
+        app.tab_manager.switch_to_session(1);
+        
+        // Render the UI
+        terminal.draw(|f| {
+            super::ui(f, &mut app);
+        }).unwrap();
+        
+        // Get the rendered content
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect::<String>();
+        
+        // Check that tab content is rendered
+        assert!(content.contains("[1:prod-web]"), "Should contain first tab");
+        assert!(content.contains("[2:dev-db]"), "Should contain second tab");
+        assert!(content.contains("▶"), "Should show current tab indicator");
+        assert!(content.contains("Ctrl+N"), "Should show instructions");
+    }
+
+    #[test]
+    fn test_tab_bar_not_rendered_when_no_sessions() {
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        
+        let mut app = create_test_app();
+        
+        // Render the UI with no sessions
+        terminal.draw(|f| {
+            super::ui(f, &mut app);
+        }).unwrap();
+        
+        // Get the rendered content
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect::<String>();
+        
+        // Check that no tab content is rendered
+        assert!(!content.contains("[1:"), "Should not contain tab content when no sessions");
+        assert!(!content.contains("▶"), "Should not show current tab indicator");
     }
 }
