@@ -49,6 +49,8 @@ pub enum FocusState {
     Search,
     /// Session manager overlay - manage all active sessions
     SessionManager,
+    /// Rename session mode - inline editing of session name
+    RenameSession,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +101,10 @@ pub struct App {
 
     // Session manager overlay
     pub session_manager_selection_index: usize,
+
+    // Session rename state
+    pub session_rename_input: Option<Input>,
+    pub session_rename_index: Option<usize>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -182,6 +188,8 @@ impl App {
 
             tab_manager: TabManager::new(),
             session_manager_selection_index: 0,
+            session_rename_input: None,
+            session_rename_index: None,
         };
         app.calculate_table_columns_constraints();
 
@@ -332,6 +340,7 @@ impl App {
             FocusState::Normal => self.handle_normal_mode_keys(terminal, key),
             FocusState::Search => Ok(self.handle_search_mode_keys(key)),
             FocusState::SessionManager => Ok(self.handle_session_manager_keys(key)),
+            FocusState::RenameSession => Ok(self.handle_rename_session_keys(key)),
         }
     }
 
@@ -509,9 +518,123 @@ impl App {
                     self.focus_state = FocusState::Normal;
                 }
             }
+            Char('d') => {
+                // Disconnect selected session
+                if self.tab_manager.has_sessions()
+                    && self.session_manager_selection_index < self.tab_manager.session_count()
+                    && self
+                        .tab_manager
+                        .disconnect_session(self.session_manager_selection_index)
+                {
+                    let session_name = self.tab_manager.sessions()
+                        [self.session_manager_selection_index]
+                        .host
+                        .name
+                        .clone();
+                    self.set_feedback_message(
+                        format!("Disconnected session '{}'", session_name),
+                        false,
+                    );
+                }
+                // Stay in session manager mode
+            }
+            Char('r') => {
+                // Rename selected session
+                if self.tab_manager.has_sessions()
+                    && self.session_manager_selection_index < self.tab_manager.session_count()
+                {
+                    let current_name = &self.tab_manager.sessions()
+                        [self.session_manager_selection_index]
+                        .host
+                        .name;
+                    self.session_rename_input = Some(Input::from(current_name.clone()));
+                    self.session_rename_index = Some(self.session_manager_selection_index);
+                    self.focus_state = FocusState::RenameSession;
+                }
+                // Switch to rename mode if session exists
+            }
+            Char('x') => {
+                // Close selected session
+                if self.tab_manager.has_sessions()
+                    && self.session_manager_selection_index < self.tab_manager.session_count()
+                {
+                    let session_name = self.tab_manager.sessions()
+                        [self.session_manager_selection_index]
+                        .host
+                        .name
+                        .clone();
+
+                    if self
+                        .tab_manager
+                        .close_session(self.session_manager_selection_index)
+                    {
+                        self.set_feedback_message(
+                            format!("Closed session '{}'", session_name),
+                            false,
+                        );
+
+                        // Adjust selection index if it's now beyond the list
+                        if self.session_manager_selection_index >= self.tab_manager.session_count()
+                            && self.tab_manager.session_count() > 0
+                        {
+                            self.session_manager_selection_index =
+                                self.tab_manager.session_count() - 1;
+                        }
+
+                        // If no sessions left, close session manager and return to normal mode
+                        if !self.tab_manager.has_sessions() {
+                            self.focus_state = FocusState::Normal;
+                        }
+                    }
+                }
+                // Stay in session manager mode unless no sessions left
+            }
             _ => {
-                // TODO: Implement other session manager commands (N, X, D, R)
+                // TODO: Implement other session manager commands (N)
                 return AppKeyAction::Continue;
+            }
+        }
+
+        AppKeyAction::Ok
+    }
+
+    fn handle_rename_session_keys(&mut self, key: KeyEvent) -> AppKeyAction {
+        #[allow(clippy::enum_glob_use)]
+        use KeyCode::*;
+
+        match key.code {
+            Esc => {
+                // Cancel rename and return to session manager
+                self.session_rename_input = None;
+                self.session_rename_index = None;
+                self.focus_state = FocusState::SessionManager;
+            }
+            Enter => {
+                // Apply rename and return to session manager
+                if let (Some(input), Some(session_index)) =
+                    (&self.session_rename_input, self.session_rename_index)
+                {
+                    let new_name = input.value().trim().to_string();
+                    if !new_name.is_empty()
+                        && self
+                            .tab_manager
+                            .rename_session(session_index, new_name.clone())
+                    {
+                        self.set_feedback_message(
+                            format!("Renamed session to '{}'", new_name),
+                            false,
+                        );
+                    }
+                }
+                self.session_rename_input = None;
+                self.session_rename_index = None;
+                self.focus_state = FocusState::SessionManager;
+            }
+            _ => {
+                // Handle text input
+                if let Some(input) = &mut self.session_rename_input {
+                    input.handle_event(&crossterm::event::Event::Key(key));
+                }
             }
         }
 
@@ -1524,6 +1647,8 @@ mod tests {
             pending_g: false,
             tab_manager: TabManager::new(),
             session_manager_selection_index: 0,
+            session_rename_input: None,
+            session_rename_index: None,
         }
     }
 
@@ -2646,5 +2771,485 @@ mod tests {
         // Should switch to session 0 and close session manager
         assert_eq!(app.tab_manager.current_session_index(), 0);
         assert_eq!(app.focus_state, FocusState::Normal);
+    }
+
+    #[test]
+    fn test_session_manager_disconnect_command() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Add test sessions
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create sessions
+        app.tab_manager.add_session(app.hosts[0].clone()).ok();
+        app.tab_manager.add_session(app.hosts[1].clone()).ok();
+
+        // Verify initial state - both sessions connected
+        assert_eq!(app.tab_manager.session_count(), 2);
+        assert_eq!(
+            app.tab_manager.sessions()[0].status,
+            crate::ui::tabs::SessionStatus::Connected
+        );
+        assert_eq!(
+            app.tab_manager.sessions()[1].status,
+            crate::ui::tabs::SessionStatus::Connected
+        );
+
+        // Select first session and press 'd' to disconnect
+        app.session_manager_selection_index = 0;
+        let d_key = KeyEvent {
+            code: KeyCode::Char('d'),
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(d_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // First session should be disconnected, second still connected
+        assert_eq!(
+            app.tab_manager.sessions()[0].status,
+            crate::ui::tabs::SessionStatus::Disconnected
+        );
+        assert_eq!(
+            app.tab_manager.sessions()[1].status,
+            crate::ui::tabs::SessionStatus::Connected
+        );
+
+        // Should remain in session manager mode
+        assert_eq!(app.focus_state, FocusState::SessionManager);
+    }
+
+    #[test]
+    fn test_session_manager_disconnect_empty_sessions() {
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Try to disconnect when no sessions exist
+        let d_key = KeyEvent {
+            code: KeyCode::Char('d'),
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(d_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should handle gracefully - no crash
+        assert!(!app.tab_manager.has_sessions());
+        assert_eq!(app.focus_state, FocusState::SessionManager);
+    }
+
+    #[test]
+    fn test_session_manager_rename_command() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Add test session
+        let hosts = vec![Host {
+            name: "original-name".to_string(),
+            destination: "host1.com".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        }];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create session
+        app.tab_manager.add_session(app.hosts[0].clone()).ok();
+
+        // Verify initial name
+        assert_eq!(app.tab_manager.sessions()[0].host.name, "original-name");
+
+        // Select session and press 'r' to rename
+        app.session_manager_selection_index = 0;
+        let r_key = KeyEvent {
+            code: KeyCode::Char('r'),
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(r_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should switch to rename mode
+        assert_eq!(app.focus_state, FocusState::RenameSession);
+        assert!(app.session_rename_input.is_some());
+        assert_eq!(app.session_rename_index, Some(0));
+    }
+
+    #[test]
+    fn test_session_manager_rename_empty_sessions() {
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Try to rename when no sessions exist
+        let r_key = KeyEvent {
+            code: KeyCode::Char('r'),
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(r_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should handle gracefully - no crash, no mode change
+        assert!(!app.tab_manager.has_sessions());
+        assert_eq!(app.focus_state, FocusState::SessionManager);
+        assert!(app.session_rename_input.is_none());
+    }
+
+    #[test]
+    fn test_session_rename_input_handling() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        app.focus_state = FocusState::RenameSession;
+
+        // Add test session
+        let hosts = vec![Host {
+            name: "original-name".to_string(),
+            destination: "host1.com".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        }];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create session and set up rename state
+        app.tab_manager.add_session(app.hosts[0].clone()).ok();
+        app.session_rename_input = Some(tui_input::Input::from("new-name".to_string()));
+        app.session_rename_index = Some(0);
+
+        // Test Enter key to confirm rename
+        let enter_key = KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_rename_session_keys(enter_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should apply rename and return to session manager
+        assert_eq!(app.tab_manager.sessions()[0].host.name, "new-name");
+        assert_eq!(app.focus_state, FocusState::SessionManager);
+        assert!(app.session_rename_input.is_none());
+        assert_eq!(app.session_rename_index, None);
+
+        // Verify feedback message
+        assert!(app.feedback_message.is_some());
+        assert!(!app.is_feedback_error);
+    }
+
+    #[test]
+    fn test_session_manager_close_command() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Add test sessions
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host3".to_string(),
+                destination: "host3.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create three sessions
+        app.tab_manager.add_session(app.hosts[0].clone()).ok();
+        app.tab_manager.add_session(app.hosts[1].clone()).ok();
+        app.tab_manager.add_session(app.hosts[2].clone()).ok();
+
+        // Verify initial state - 3 sessions, current is index 2 (last added)
+        assert_eq!(app.tab_manager.session_count(), 3);
+        assert_eq!(app.tab_manager.current_session_index(), 2);
+
+        // Select middle session (index 1) and close it
+        app.session_manager_selection_index = 1;
+        let x_key = KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(x_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should have 2 sessions left
+        assert_eq!(app.tab_manager.session_count(), 2);
+
+        // Remaining sessions should be host1 and host3
+        assert_eq!(app.tab_manager.sessions()[0].host.name, "host1");
+        assert_eq!(app.tab_manager.sessions()[1].host.name, "host3");
+
+        // Current session index should be adjusted if needed
+        assert!(app.tab_manager.current_session_index() < app.tab_manager.session_count());
+
+        // Selection index should be adjusted if it was beyond the list
+        if app.session_manager_selection_index >= app.tab_manager.session_count() {
+            assert_eq!(
+                app.session_manager_selection_index,
+                app.tab_manager.session_count() - 1
+            );
+        }
+
+        // Should remain in session manager mode
+        assert_eq!(app.focus_state, FocusState::SessionManager);
+    }
+
+    #[test]
+    fn test_session_manager_close_current_session() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Add test sessions
+        let hosts = vec![
+            Host {
+                name: "host1".to_string(),
+                destination: "host1.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+            Host {
+                name: "host2".to_string(),
+                destination: "host2.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            },
+        ];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create two sessions
+        app.tab_manager.add_session(app.hosts[0].clone()).ok();
+        app.tab_manager.add_session(app.hosts[1].clone()).ok();
+
+        // Current session is index 1 (last added)
+        assert_eq!(app.tab_manager.current_session_index(), 1);
+
+        // Select and close the current session (index 1)
+        app.session_manager_selection_index = 1;
+        let x_key = KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(x_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should have 1 session left
+        assert_eq!(app.tab_manager.session_count(), 1);
+        assert_eq!(app.tab_manager.sessions()[0].host.name, "host1");
+
+        // Current session should switch to index 0 (the remaining session)
+        assert_eq!(app.tab_manager.current_session_index(), 0);
+    }
+
+    #[test]
+    fn test_session_manager_close_last_session() {
+        use crate::ssh::Host;
+        use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Add one test session
+        let hosts = vec![Host {
+            name: "only-host".to_string(),
+            destination: "only-host.com".to_string(),
+            user: None,
+            port: None,
+            aliases: String::new(),
+            proxy_command: None,
+        }];
+
+        let matcher = SkimMatcherV2::default();
+        app.hosts = Searchable::new(
+            hosts,
+            "",
+            move |host: &&crate::ssh::Host, search_value: &str| -> bool {
+                search_value.is_empty()
+                    || matcher.fuzzy_match(&host.name, search_value).is_some()
+                    || matcher
+                        .fuzzy_match(&host.destination, search_value)
+                        .is_some()
+                    || matcher.fuzzy_match(&host.aliases, search_value).is_some()
+            },
+        );
+
+        // Create one session
+        app.tab_manager.add_session(app.hosts[0].clone()).ok();
+        assert_eq!(app.tab_manager.session_count(), 1);
+
+        // Close the only session
+        app.session_manager_selection_index = 0;
+        let x_key = KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(x_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should have no sessions left
+        assert_eq!(app.tab_manager.session_count(), 0);
+        assert!(!app.tab_manager.has_sessions());
+
+        // Should close session manager and return to normal mode since no sessions left
+        assert_eq!(app.focus_state, FocusState::Normal);
+    }
+
+    #[test]
+    fn test_session_manager_close_empty_sessions() {
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Try to close when no sessions exist
+        let x_key = KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+
+        let action = app.handle_session_manager_keys(x_key);
+        assert_eq!(action, AppKeyAction::Ok);
+
+        // Should handle gracefully - no crash
+        assert!(!app.tab_manager.has_sessions());
+        assert_eq!(app.focus_state, FocusState::SessionManager);
     }
 }

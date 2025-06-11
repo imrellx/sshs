@@ -245,6 +245,71 @@ impl TabManager {
             false
         }
     }
+
+    /// Disconnect a session by index (0-based)
+    pub fn disconnect_session(&mut self, session_index: usize) -> bool {
+        if let Some(session) = self.sessions.get_mut(session_index) {
+            // Set status to disconnected
+            session.status = SessionStatus::Disconnected;
+
+            // Terminate SSH process if running
+            if let Some(mut process) = session.ssh_process.take() {
+                let _ = process.kill(); // Ignore errors on kill
+                let _ = process.wait(); // Clean up zombie process
+            }
+
+            // Mark as having an error to show disconnect indicator
+            session.activity.has_error = true;
+
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Rename a session by index (0-based)
+    pub fn rename_session(&mut self, session_index: usize, new_name: String) -> bool {
+        if let Some(session) = self.sessions.get_mut(session_index) {
+            session.host.name = new_name;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Close (remove) a session by index (0-based)
+    /// Returns true if a session was removed, false if index was invalid
+    pub fn close_session(&mut self, session_index: usize) -> bool {
+        if session_index >= self.sessions.len() {
+            return false;
+        }
+
+        // Terminate SSH process if running before removing
+        if let Some(session) = self.sessions.get_mut(session_index) {
+            if let Some(mut process) = session.ssh_process.take() {
+                let _ = process.kill();
+                let _ = process.wait();
+            }
+        }
+
+        // Remove the session
+        self.sessions.remove(session_index);
+
+        // Adjust current session index if necessary
+        if self.sessions.is_empty() {
+            // No sessions left
+            self.current_session_index = 0;
+        } else if self.current_session_index >= self.sessions.len() {
+            // Current session was at/beyond the end, move to last session
+            self.current_session_index = self.sessions.len() - 1;
+        } else if self.current_session_index > session_index {
+            // Current session was after the removed one, shift index down
+            self.current_session_index -= 1;
+        }
+        // If current session was before the removed one, no change needed
+
+        true
+    }
 }
 
 impl Default for TabManager {
@@ -566,5 +631,193 @@ mod tests {
         let display = manager.tab_bar_display();
         assert!(display.contains("▶[1:host1]")); // No * indicator
         assert!(display.contains("[2:host2]"));
+    }
+
+    #[test]
+    fn test_disconnect_session() {
+        let mut manager = TabManager::new();
+
+        // Add sessions
+        manager.add_session(create_test_host("host1")).unwrap();
+        manager.add_session(create_test_host("host2")).unwrap();
+
+        // Initially both sessions should be connected
+        assert_eq!(manager.sessions()[0].status, SessionStatus::Connected);
+        assert_eq!(manager.sessions()[1].status, SessionStatus::Connected);
+        assert!(!manager.sessions()[0].activity.has_error);
+        assert!(!manager.sessions()[1].activity.has_error);
+
+        // Disconnect first session
+        assert!(manager.disconnect_session(0));
+
+        // First session should be disconnected with error indicator
+        assert_eq!(manager.sessions()[0].status, SessionStatus::Disconnected);
+        assert!(manager.sessions()[0].activity.has_error);
+
+        // Second session should remain connected
+        assert_eq!(manager.sessions()[1].status, SessionStatus::Connected);
+        assert!(!manager.sessions()[1].activity.has_error);
+    }
+
+    #[test]
+    fn test_disconnect_session_invalid_index() {
+        let mut manager = TabManager::new();
+
+        // Try to disconnect non-existent session
+        assert!(!manager.disconnect_session(0));
+        assert!(!manager.disconnect_session(99));
+
+        // Add one session and try to disconnect invalid index
+        manager.add_session(create_test_host("host1")).unwrap();
+        assert!(!manager.disconnect_session(1)); // Only index 0 exists
+        assert!(manager.disconnect_session(0)); // Valid index should work
+    }
+
+    #[test]
+    fn test_rename_session() {
+        let mut manager = TabManager::new();
+
+        // Add sessions
+        manager.add_session(create_test_host("host1")).unwrap();
+        manager.add_session(create_test_host("host2")).unwrap();
+
+        // Initially sessions have original names
+        assert_eq!(manager.sessions()[0].host.name, "host1");
+        assert_eq!(manager.sessions()[1].host.name, "host2");
+
+        // Rename first session
+        assert!(manager.rename_session(0, "new-host1".to_string()));
+        assert_eq!(manager.sessions()[0].host.name, "new-host1");
+        assert_eq!(manager.sessions()[1].host.name, "host2"); // Second unchanged
+
+        // Rename second session
+        assert!(manager.rename_session(1, "new-host2".to_string()));
+        assert_eq!(manager.sessions()[0].host.name, "new-host1");
+        assert_eq!(manager.sessions()[1].host.name, "new-host2");
+    }
+
+    #[test]
+    fn test_rename_session_invalid_index() {
+        let mut manager = TabManager::new();
+
+        // Try to rename non-existent session
+        assert!(!manager.rename_session(0, "new-name".to_string()));
+        assert!(!manager.rename_session(99, "new-name".to_string()));
+
+        // Add one session and try to rename invalid index
+        manager.add_session(create_test_host("host1")).unwrap();
+        assert!(!manager.rename_session(1, "new-name".to_string())); // Only index 0 exists
+        assert!(manager.rename_session(0, "new-name".to_string())); // Valid index should work
+        assert_eq!(manager.sessions()[0].host.name, "new-name");
+    }
+
+    #[test]
+    fn test_close_session_middle() {
+        let mut manager = TabManager::new();
+
+        // Add three sessions
+        manager.add_session(create_test_host("host1")).unwrap();
+        manager.add_session(create_test_host("host2")).unwrap();
+        manager.add_session(create_test_host("host3")).unwrap();
+
+        // Current session should be index 2 (last added)
+        assert_eq!(manager.current_session_index(), 2);
+        assert_eq!(manager.session_count(), 3);
+
+        // Close middle session (index 1)
+        assert!(manager.close_session(1));
+
+        // Should have 2 sessions left
+        assert_eq!(manager.session_count(), 2);
+        assert_eq!(manager.sessions()[0].host.name, "host1");
+        assert_eq!(manager.sessions()[1].host.name, "host3");
+
+        // Current session index should shift down since it was after the removed session
+        assert_eq!(manager.current_session_index(), 1);
+    }
+
+    #[test]
+    fn test_close_session_current() {
+        let mut manager = TabManager::new();
+
+        // Add two sessions
+        manager.add_session(create_test_host("host1")).unwrap();
+        manager.add_session(create_test_host("host2")).unwrap();
+
+        // Current session is index 1 (last added)
+        assert_eq!(manager.current_session_index(), 1);
+
+        // Close current session (index 1)
+        assert!(manager.close_session(1));
+
+        // Should have 1 session left
+        assert_eq!(manager.session_count(), 1);
+        assert_eq!(manager.sessions()[0].host.name, "host1");
+
+        // Current session should move to index 0 (last remaining)
+        assert_eq!(manager.current_session_index(), 0);
+    }
+
+    #[test]
+    fn test_close_session_before_current() {
+        let mut manager = TabManager::new();
+
+        // Add three sessions
+        manager.add_session(create_test_host("host1")).unwrap();
+        manager.add_session(create_test_host("host2")).unwrap();
+        manager.add_session(create_test_host("host3")).unwrap();
+
+        // Switch to middle session (index 1)
+        manager.switch_to_session(2); // 1-based, so index 1
+        assert_eq!(manager.current_session_index(), 1);
+
+        // Close first session (index 0, before current)
+        assert!(manager.close_session(0));
+
+        // Should have 2 sessions left
+        assert_eq!(manager.session_count(), 2);
+        assert_eq!(manager.sessions()[0].host.name, "host2");
+        assert_eq!(manager.sessions()[1].host.name, "host3");
+
+        // Current session should shift down from 1 to 0
+        assert_eq!(manager.current_session_index(), 0);
+    }
+
+    #[test]
+    fn test_close_last_remaining_session() {
+        let mut manager = TabManager::new();
+
+        // Add one session
+        manager.add_session(create_test_host("only-host")).unwrap();
+        assert_eq!(manager.session_count(), 1);
+        assert_eq!(manager.current_session_index(), 0);
+
+        // Close the only session
+        assert!(manager.close_session(0));
+
+        // Should have no sessions left
+        assert_eq!(manager.session_count(), 0);
+        assert!(!manager.has_sessions());
+        assert_eq!(manager.current_session_index(), 0); // Reset to 0
+    }
+
+    #[test]
+    fn test_close_session_invalid_index() {
+        let mut manager = TabManager::new();
+
+        // Try to close non-existent session
+        assert!(!manager.close_session(0));
+        assert!(!manager.close_session(99));
+
+        // Add one session
+        manager.add_session(create_test_host("host1")).unwrap();
+
+        // Try to close invalid index
+        assert!(!manager.close_session(1));
+        assert!(!manager.close_session(99));
+
+        // Valid index should work
+        assert!(manager.close_session(0));
+        assert_eq!(manager.session_count(), 0);
     }
 }

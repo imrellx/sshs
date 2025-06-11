@@ -571,7 +571,12 @@ pub fn render_footer_with_mode(f: &mut Frame, app: &mut App, area: Rect) {
         }
         crate::ui::app::FocusState::SessionManager => {
             let mode = "-- SESSION MANAGER --";
-            let shortcuts = "(↑/↓) navigate | (enter) switch | (n) new | (x) close | (d) disconnect | (q/esc) quit";
+            let shortcuts = "(↑/↓) navigate | (enter) switch | (r) rename | (d) disconnect | (x) close | (q/esc) quit";
+            (mode, shortcuts)
+        }
+        crate::ui::app::FocusState::RenameSession => {
+            let mode = "-- RENAME SESSION --";
+            let shortcuts = "(type new name) | (enter) confirm | (esc) cancel";
             (mode, shortcuts)
         }
     };
@@ -758,8 +763,8 @@ fn render_session_manager_help(f: &mut Frame, area: Rect) {
             ),
             Span::styled("Enter", Style::default().fg(tailwind::GREEN.c400).bold()),
             Span::raw("=Switch  "),
-            Span::styled("N", Style::default().fg(tailwind::GREEN.c400).bold()),
-            Span::raw("=New  "),
+            Span::styled("R", Style::default().fg(tailwind::BLUE.c400).bold()),
+            Span::raw("=Rename  "),
             Span::styled("X", Style::default().fg(tailwind::RED.c400).bold()),
             Span::raw("=Close"),
         ]),
@@ -841,6 +846,8 @@ mod tests {
             pending_g: false,
             tab_manager: TabManager::new(),
             session_manager_selection_index: 0,
+            session_rename_input: None,
+            session_rename_index: None,
         }
     }
 
