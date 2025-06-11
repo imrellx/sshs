@@ -1,13 +1,13 @@
 # SSHS Development TODO - Issue #13 Continuation
 
 ## Current Task: Issue #13 - Enhanced Tab Features
-**Status**: Phase 1 - Remove Session Limits  
+**Status**: Phase 2 Complete - Activity Indicators Implemented  
 **Started**: December 11, 2025
 
 ## Progress Tracker
 - [x] Issue #13 MVP: Basic tab management ✅ (deployed as v4.8.0)
-- [ ] Phase 1: Remove 3-session limit (practical improvement) - **IN PROGRESS**
-- [ ] Phase 2: Add activity indicators (*, !, @)
+- [x] Phase 1: Remove 3-session limit (practical improvement) ✅
+- [x] Phase 2: Add activity indicators (*, !, @) ✅
 - [ ] Phase 3: Implement session manager overlay
 - [ ] Phase 4: Quality checks and deployment
 
