@@ -13,7 +13,6 @@ use super::app::{
     SEARCHBAR_HORIZONTAL_PADDING, SEARCH_BAR_HEIGHT, TABLE_HEADER_HEIGHT, TABLE_MIN_HEIGHT,
 };
 use super::form::FormState;
-use super::tabs::TabManager;
 
 /// Render the UI
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -446,7 +445,7 @@ pub fn render_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
         if index == current_index {
             // Current tab - highlighted
             tab_spans.push(Span::styled(
-                format!("▶{}", tab_text),
+                format!("▶{tab_text}"),
                 Style::default()
                     .fg(Color::White)
                     .bg(app.palette.c600)
@@ -598,6 +597,7 @@ mod tests {
     use crate::searchable::Searchable;
     use crate::ui::app::{App, AppConfig, FocusState};
     use crate::ui::form::AddHostForm;
+    use crate::ui::tabs::TabManager;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::widgets::TableState;

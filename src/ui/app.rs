@@ -810,10 +810,10 @@ impl App {
         let host = self.hosts[selected].clone();
         match self.tab_manager.add_session(host) {
             Ok(session_id) => {
-                self.set_feedback_message(format!("New session {} created", session_id), false);
+                self.set_feedback_message(format!("New session {session_id} created"), false);
             }
             Err(e) => {
-                self.set_feedback_message(format!("Error: {}", e), true);
+                self.set_feedback_message(format!("Error: {e}"), true);
             }
         }
     }

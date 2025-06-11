@@ -16,6 +16,7 @@ pub struct Session {
 
 impl Session {
     /// Create a new session
+    #[must_use]
     pub fn new(id: usize, host: Host) -> Self {
         Self {
             id,
@@ -26,11 +27,13 @@ impl Session {
     }
 
     /// Get the display name for the tab
+    #[must_use]
     pub fn tab_display_name(&self) -> String {
         format!("[{}:{}]", self.id, self.host.name)
     }
 
     /// Check if this session has an active SSH connection
+    #[must_use]
     pub fn is_connected(&self) -> bool {
         self.ssh_process.is_some()
     }
@@ -46,6 +49,7 @@ pub struct TabManager {
 
 impl TabManager {
     /// Create a new tab manager
+    #[must_use]
     pub fn new() -> Self {
         Self {
             sessions: Vec::new(),
@@ -55,6 +59,10 @@ impl TabManager {
     }
 
     /// Add a new session if under the limit
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if the maximum number of sessions is reached.
     pub fn add_session(&mut self, host: Host) -> Result<usize> {
         if self.sessions.len() >= MAX_SESSIONS {
             anyhow::bail!("Maximum number of sessions ({}) reached", MAX_SESSIONS);
@@ -82,31 +90,37 @@ impl TabManager {
     }
 
     /// Get the current active session
+    #[must_use]
     pub fn current_session(&self) -> Option<&Session> {
         self.sessions.get(self.current_session_index)
     }
 
     /// Get all sessions for tab display
+    #[must_use]
     pub fn sessions(&self) -> &[Session] {
         &self.sessions
     }
 
     /// Get the current session index (0-based)
+    #[must_use]
     pub fn current_session_index(&self) -> usize {
         self.current_session_index
     }
 
     /// Check if any sessions exist
+    #[must_use]
     pub fn has_sessions(&self) -> bool {
         !self.sessions.is_empty()
     }
 
     /// Get the number of active sessions
+    #[must_use]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }
 
     /// Generate the tab bar display string
+    #[must_use]
     pub fn tab_bar_display(&self) -> String {
         if self.sessions.is_empty() {
             return String::new();
@@ -118,13 +132,12 @@ impl TabManager {
             .map(|(index, session)| {
                 let display = session.tab_display_name();
                 if index == self.current_session_index {
-                    format!("▶{}", display) // Highlight current tab
+                    format!("▶{display}") // Highlight current tab
                 } else {
                     display
                 }
             })
-            .collect::<Vec<_>>()
-            .join("")
+            .collect::<String>()
     }
 }
 
@@ -141,7 +154,7 @@ mod tests {
     fn create_test_host(name: &str) -> Host {
         Host {
             name: name.to_string(),
-            destination: format!("{}.com", name),
+            destination: format!("{name}.com"),
             user: Some("root".to_string()),
             port: Some("22".to_string()),
             aliases: String::new(),
@@ -196,7 +209,7 @@ mod tests {
 
         // Add maximum sessions
         for i in 1..=MAX_SESSIONS {
-            let host = create_test_host(&format!("host{}", i));
+            let host = create_test_host(&format!("host{i}"));
             manager.add_session(host).unwrap();
         }
 
