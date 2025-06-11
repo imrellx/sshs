@@ -2067,17 +2067,17 @@ mod tests {
             },
         );
 
-        // Create maximum sessions
+        // Create sessions up to the new limit (20)
         app.table_state.select(Some(0));
-        for _ in 0..3 {
+        for _ in 0..20 {
             app.open_new_session();
         }
 
-        assert_eq!(app.tab_manager.session_count(), 3);
+        assert_eq!(app.tab_manager.session_count(), 20);
 
         // Try to create one more - should fail
         app.open_new_session();
-        assert_eq!(app.tab_manager.session_count(), 3); // Should still be 3
+        assert_eq!(app.tab_manager.session_count(), 20); // Should still be 20
         assert!(app.feedback_message.is_some());
         assert!(app.is_feedback_error); // Should show error message
     }

@@ -2,8 +2,8 @@ use crate::ssh::Host;
 use anyhow::Result;
 use std::process::Child;
 
-/// Maximum number of concurrent sessions for MVP
-pub const MAX_SESSIONS: usize = 3;
+/// Maximum number of concurrent sessions (increased from MVP limit)
+pub const MAX_SESSIONS: usize = 20;
 
 /// Represents a single SSH session tab
 #[derive(Debug)]
@@ -295,6 +295,71 @@ mod tests {
     fn test_tab_bar_display_empty() {
         let manager = TabManager::new();
         assert_eq!(manager.tab_bar_display(), "");
+    }
+
+    #[test]
+    fn test_create_many_sessions() {
+        let mut manager = TabManager::new();
+
+        // Should be able to create 10 sessions (more than current 3 limit)
+        for i in 1..=10 {
+            let host = create_test_host(&format!("host{i}"));
+            let session_id = manager.add_session(host).unwrap();
+            assert_eq!(session_id, i);
+        }
+
+        assert_eq!(manager.session_count(), 10);
+        assert_eq!(manager.current_session_index(), 9); // Last added session
+
+        // Verify we can navigate through all sessions
+        for i in 1..=10 {
+            assert!(manager.switch_to_session(i));
+            assert_eq!(manager.current_session_index(), i - 1); // 0-based index
+            let current = manager.current_session().unwrap();
+            assert_eq!(current.host.name, format!("host{i}"));
+        }
+    }
+
+    #[test]
+    fn test_reasonable_session_limit() {
+        let mut manager = TabManager::new();
+
+        // Should be able to create up to 20 sessions
+        for i in 1..=20 {
+            let host = create_test_host(&format!("host{i}"));
+            manager.add_session(host).unwrap();
+        }
+
+        assert_eq!(manager.session_count(), 20);
+
+        // Try to add one more - should fail at reasonable limit
+        let result = manager.add_session(create_test_host("extra"));
+        assert!(result.is_err());
+        assert_eq!(manager.session_count(), 20);
+    }
+
+    #[test]
+    fn test_tab_bar_display_overflow() {
+        let mut manager = TabManager::new();
+
+        // Create many sessions to test overflow display
+        for i in 1..=15 {
+            let host = create_test_host(&format!("host{i}"));
+            manager.add_session(host).unwrap();
+        }
+
+        // Test that tab bar display includes all sessions
+        let display = manager.tab_bar_display();
+        
+        // Should contain all 15 tabs
+        for i in 1..=15 {
+            assert!(display.contains(&format!("[{i}:host{i}]")), 
+                "Display should contain tab {i}: {display}");
+        }
+        
+        // Should highlight the last session (current)
+        assert!(display.contains("▶[15:host15]"), 
+            "Should highlight current tab: {display}");
     }
 
     #[test]
