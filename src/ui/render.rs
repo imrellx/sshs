@@ -17,7 +17,13 @@ use super::form::FormState;
 /// Render the UI
 pub fn ui(f: &mut Frame, app: &mut App) {
     match app.form_state {
-        FormState::Hidden => render_main_ui(f, app),
+        FormState::Hidden => {
+            render_main_ui(f, app);
+            // Render session manager overlay if active
+            if app.focus_state == super::app::FocusState::SessionManager {
+                render_session_manager_overlay(f, app);
+            }
+        }
         FormState::Active => render_form_ui(f, app),
         FormState::Confirming => render_confirmation_ui(f, app),
     }
@@ -596,6 +602,190 @@ pub fn render_footer(f: &mut Frame, app: &mut App, area: Rect) {
     render_footer_with_mode(f, app, area);
 }
 
+/// Render the session manager overlay
+fn render_session_manager_overlay(f: &mut Frame, app: &mut App) {
+    // Calculate overlay dimensions (centered, 60% of screen width, 70% of height)
+    let area = f.area();
+    let overlay_width = (area.width * 60) / 100;
+    let overlay_height = (area.height * 70) / 100;
+    let horizontal_margin = (area.width.saturating_sub(overlay_width)) / 2;
+    let vertical_margin = (area.height.saturating_sub(overlay_height)) / 2;
+    let overlay_area = Rect::new(
+        horizontal_margin,
+        vertical_margin,
+        overlay_width,
+        overlay_height,
+    );
+
+    // Clear the overlay area
+    f.render_widget(Clear, overlay_area);
+
+    // Create the outer block with title and borders
+    let block = Block::default()
+        .title(" Session Manager ")
+        .title_style(Style::default().fg(tailwind::BLUE.c200).bold())
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(tailwind::BLUE.c400))
+        .style(Style::default().bg(tailwind::SLATE.c900));
+
+    f.render_widget(block, overlay_area);
+
+    // Calculate inner area for content
+    let inner_area = overlay_area.inner(Margin::new(1, 1));
+
+    if !app.tab_manager.has_sessions() {
+        // Show empty message
+        let empty_text = Paragraph::new("No active sessions")
+            .style(Style::default().fg(tailwind::SLATE.c400))
+            .alignment(Alignment::Center);
+        f.render_widget(empty_text, inner_area);
+        return;
+    }
+
+    // Split into session list and help area
+    let chunks = Layout::vertical([
+        Constraint::Min(5),    // Session list
+        Constraint::Length(3), // Help text
+    ])
+    .split(inner_area);
+
+    // Render session list
+    render_session_list(f, app, chunks[0]);
+
+    // Render help text
+    render_session_manager_help(f, chunks[1]);
+}
+
+/// Render the session list table
+fn render_session_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let sessions = app.tab_manager.sessions();
+    let current_session_index = app.tab_manager.current_session_index();
+
+    // Create table rows
+    let rows: Vec<Row> = sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| {
+            let session_number = (index + 1).to_string();
+            let name = session.host.name.clone();
+            let status = match session.status {
+                crate::ui::tabs::SessionStatus::Connected => "Connected",
+                crate::ui::tabs::SessionStatus::Reconnecting => "Reconnecting",
+                crate::ui::tabs::SessionStatus::Disconnected => "Disconnected",
+            };
+
+            // Build activity indicator string
+            let mut activity = String::new();
+            if session.activity.has_new_output {
+                activity.push('*');
+            }
+            if session.activity.has_error {
+                activity.push('!');
+            }
+            if session.activity.has_background_activity {
+                activity.push('@');
+            }
+            if activity.is_empty() {
+                activity = "-".to_string();
+            }
+
+            // Add current session indicator
+            let indicator = if index == current_session_index {
+                "▶"
+            } else {
+                " "
+            };
+
+            let row_style = if index == app.session_manager_selection_index {
+                // Highlight selected row
+                Style::default()
+                    .bg(tailwind::BLUE.c800)
+                    .fg(tailwind::BLUE.c100)
+            } else {
+                Style::default()
+            };
+
+            Row::new(vec![
+                Cell::from(indicator),
+                Cell::from(session_number),
+                Cell::from(name),
+                Cell::from(status),
+                Cell::from(activity),
+            ])
+            .style(row_style)
+        })
+        .collect();
+
+    // Create table headers
+    let headers = Row::new(vec!["", "Tab", "Name", "Status", "Activity"])
+        .style(Style::default().fg(tailwind::SLATE.c300).bold())
+        .bottom_margin(1);
+
+    // Create the table
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(2),  // Current indicator
+            Constraint::Length(4),  // Tab number
+            Constraint::Min(15),    // Name (flexible)
+            Constraint::Length(12), // Status
+            Constraint::Length(8),  // Activity
+        ],
+    )
+    .header(headers)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(tailwind::SLATE.c600))
+            .title(" Sessions ")
+            .title_style(Style::default().fg(tailwind::SLATE.c300)),
+    )
+    .row_highlight_style(Style::default().bg(tailwind::BLUE.c800))
+    .highlight_spacing(HighlightSpacing::Always);
+
+    f.render_widget(table, area);
+}
+
+/// Render the help text for session manager commands
+fn render_session_manager_help(f: &mut Frame, area: Rect) {
+    let help_text = vec![
+        Line::from(vec![
+            Span::styled(
+                "Commands: ",
+                Style::default().fg(tailwind::SLATE.c300).bold(),
+            ),
+            Span::styled("Enter", Style::default().fg(tailwind::GREEN.c400).bold()),
+            Span::raw("=Switch  "),
+            Span::styled("N", Style::default().fg(tailwind::GREEN.c400).bold()),
+            Span::raw("=New  "),
+            Span::styled("X", Style::default().fg(tailwind::RED.c400).bold()),
+            Span::raw("=Close"),
+        ]),
+        Line::from(vec![
+            Span::raw("         "),
+            Span::styled("D", Style::default().fg(tailwind::YELLOW.c400).bold()),
+            Span::raw("=Disconnect  "),
+            Span::styled("Q/Esc", Style::default().fg(tailwind::SLATE.c400).bold()),
+            Span::raw("=Quit Manager"),
+        ]),
+    ];
+
+    let help_paragraph = Paragraph::new(help_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(tailwind::SLATE.c600))
+                .title(" Commands ")
+                .title_style(Style::default().fg(tailwind::SLATE.c300)),
+        )
+        .alignment(Alignment::Center);
+
+    f.render_widget(help_paragraph, area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -909,6 +1099,113 @@ mod tests {
         assert!(
             !content.contains("▶"),
             "Should not show current tab indicator"
+        );
+    }
+
+    #[test]
+    fn test_session_manager_overlay_rendering() {
+        // Create a test backend with a fixed size
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Create test app with session manager active
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Add some test sessions
+        app.tab_manager
+            .add_session(crate::ssh::Host {
+                name: "test-host-1".to_string(),
+                destination: "user@host1.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            })
+            .ok();
+
+        app.tab_manager
+            .add_session(crate::ssh::Host {
+                name: "test-host-2".to_string(),
+                destination: "user@host2.com".to_string(),
+                user: None,
+                port: None,
+                aliases: String::new(),
+                proxy_command: None,
+            })
+            .ok();
+
+        // Set selection index
+        app.session_manager_selection_index = 1;
+
+        // Render the UI
+        terminal
+            .draw(|f| {
+                ui(f, &mut app);
+            })
+            .unwrap();
+
+        // Get the rendered content
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect::<String>();
+
+        // Check that session manager overlay is rendered
+        assert!(
+            content.contains("Session Manager"),
+            "Should contain session manager title"
+        );
+        assert!(
+            content.contains("test-host-1"),
+            "Should contain first session name"
+        );
+        assert!(
+            content.contains("test-host-2"),
+            "Should contain second session name"
+        );
+        assert!(content.contains("Commands:"), "Should contain command help");
+        assert!(
+            content.contains("Enter=Switch"),
+            "Should contain Enter command help"
+        );
+    }
+
+    #[test]
+    fn test_session_manager_empty_overlay() {
+        // Create a test backend with a fixed size
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Create test app with session manager active but no sessions
+        let mut app = create_test_app();
+        app.focus_state = FocusState::SessionManager;
+
+        // Render the UI
+        terminal
+            .draw(|f| {
+                ui(f, &mut app);
+            })
+            .unwrap();
+
+        // Get the rendered content
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect::<String>();
+
+        // Check that session manager overlay shows empty message
+        assert!(
+            content.contains("Session Manager"),
+            "Should contain session manager title"
+        );
+        assert!(
+            content.contains("No active sessions"),
+            "Should contain empty sessions message"
         );
     }
 }
